@@ -282,9 +282,7 @@ class TestBankConnector(unittest.TestCase):
 	def test_no_enabled_mappings_when_enabled_raises(self):
 		"""At least one enabled mapping is required when the connector is enabled."""
 		with self.assertRaises(frappe.ValidationError):
-			frappe.get_doc(
-				self._make_connector_dict(account_mappings=[])
-			).insert()
+			frappe.get_doc(self._make_connector_dict(account_mappings=[])).insert()
 
 	def test_all_mappings_disabled_when_enabled_raises(self):
 		"""If all mappings are disabled, the connector should raise."""
@@ -303,9 +301,7 @@ class TestBankConnector(unittest.TestCase):
 
 	def test_disabled_connector_allows_zero_mappings(self):
 		"""A disabled connector should not require any account mappings."""
-		doc = frappe.get_doc(
-			self._make_connector_dict(enabled=0, account_mappings=[])
-		)
+		doc = frappe.get_doc(self._make_connector_dict(enabled=0, account_mappings=[]))
 		doc.insert()
 		self.assertTrue(doc.name)
 
@@ -399,9 +395,7 @@ class TestBankConnector(unittest.TestCase):
 
 	def test_get_connector_config_empty_scopes(self):
 		"""Empty scopes should return an empty list."""
-		doc = frappe.get_doc(
-			self._make_connector_dict(scopes="")
-		)
+		doc = frappe.get_doc(self._make_connector_dict(scopes=""))
 		doc.insert()
 		config = doc.get_connector_config()
 		self.assertEqual(config.scopes, [])

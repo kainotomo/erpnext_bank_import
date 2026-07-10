@@ -27,7 +27,6 @@ from erpnext_bank_import.connectors import (
 from erpnext_bank_import.connectors.config import ConnectorConfig
 from erpnext_bank_import.connectors.exceptions import ConfigurationError
 
-
 # =========================================================================
 # Mock helpers
 # =========================================================================

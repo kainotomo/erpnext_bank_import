@@ -170,9 +170,7 @@ class BankConnector(Document):
 	def _assert_valid_url(url: str, label: str) -> None:
 		parsed = urlparse(url)
 		if parsed.scheme not in ("http", "https") or not parsed.netloc:
-			frappe.throw(
-				frappe._("{0} must be a valid URL starting with http:// or https://.").format(label)
-			)
+			frappe.throw(frappe._("{0} must be a valid URL starting with http:// or https://.").format(label))
 
 	def _validate_oauth_fields(self) -> None:
 		if self.auth_method != "oauth2":
@@ -201,9 +199,7 @@ class BankConnector(Document):
 		enabled_mappings = [m for m in self.account_mappings if m.is_enabled]
 		if not enabled_mappings:
 			frappe.throw(
-				frappe._(
-					"At least one enabled Account Mapping is required when the connector is enabled."
-				)
+				frappe._("At least one enabled Account Mapping is required when the connector is enabled.")
 			)
 
 		# No duplicate provider_account_id within the same connector.
@@ -216,9 +212,7 @@ class BankConnector(Document):
 			seen_ids.add(pid)
 		if dup_ids:
 			frappe.throw(
-				frappe._("Duplicate Provider Account IDs are not allowed: {0}").format(
-					", ".join(dup_ids)
-				)
+				frappe._("Duplicate Provider Account IDs are not allowed: {0}").format(", ".join(dup_ids))
 			)
 
 		# No duplicate bank_account within the same connector.
@@ -232,9 +226,9 @@ class BankConnector(Document):
 				seen_bank.add(bac)
 		if dup_banks:
 			frappe.throw(
-				frappe._("Duplicate Bank Account links are not allowed within the same connector: {0}").format(
-					", ".join(dup_banks)
-				)
+				frappe._(
+					"Duplicate Bank Account links are not allowed within the same connector: {0}"
+				).format(", ".join(dup_banks))
 			)
 
 

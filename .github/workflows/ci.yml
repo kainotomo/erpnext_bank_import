@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - version-16
   pull_request:
 
 concurrency:

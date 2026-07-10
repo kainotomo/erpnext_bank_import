@@ -37,9 +37,9 @@ class BankConnectorToken(Document):
 	def validate(self) -> None:
 		"""Validate that provider_name and bank_account are set."""
 		if not self.provider_name:
-			frappe.throw("Provider Name is required.")
+			frappe.throw(frappe._("Provider Name is required."))
 		if not self.bank_account:
-			frappe.throw("Bank Account is required.")
+			frappe.throw(frappe._("Bank Account is required."))
 
 	def before_insert(self) -> None:
 		"""Ensure uniqueness of (provider_name, bank_account) pairs."""
@@ -48,8 +48,10 @@ class BankConnectorToken(Document):
 			{"provider_name": self.provider_name, "bank_account": self.bank_account},
 		):
 			frappe.throw(
-				f"A token record already exists for provider '{self.provider_name}' "
-				f"and bank account '{self.bank_account}'."
+				frappe._(
+					"A token record already exists for provider '{0}' "
+					"and bank account '{1}'."
+				).format(self.provider_name, self.bank_account)
 			)
 
 

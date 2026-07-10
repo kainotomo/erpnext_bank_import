@@ -115,12 +115,13 @@
    "fieldname": "client_secret",
    "fieldtype": "Password",
    "label": "Client Secret",
-   "mandatory_depends_on": "eval:doc.auth_method=='oauth2'"
+   "mandatory_depends_on": "eval:doc.auth_method=='oauth2' && !doc.jwt_private_key"
   },
   {
    "fieldname": "jwt_private_key",
-   "fieldtype": "Password",
+   "fieldtype": "Code",
    "label": "JWT Private Key",
+   "options": "PEM",
    "description": "PEM-encoded RSA private key for JWT client assertion (RFC 7523). Required by providers like Revolut instead of client_secret."
   },
   {

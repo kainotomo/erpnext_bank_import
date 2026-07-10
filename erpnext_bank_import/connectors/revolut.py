@@ -547,11 +547,12 @@ class RevolutConnector(BankConnector):
 # ---------------------------------------------------------------------------
 
 
-@frappe.whitelist(allow_guest=False)
+@frappe.whitelist(allow_guest=True)
 def start_oauth_flow(connector_name: str) -> str:
 	"""Initiate the Revolut OAuth2 consent flow.
 
-	Redirects the user's browser to the Revolut consent page.
+	The ``connector_name`` is encoded in the OAuth ``state`` parameter
+	so the callback can look it up directly.
 
 	Args:
 	    connector_name: The ``Bank Connector`` record name.
@@ -561,34 +562,45 @@ def start_oauth_flow(connector_name: str) -> str:
 	"""
 	from urllib.parse import urlencode
 
-	from erpnext_bank_import.connectors import get_connector_config
+	# Load config directly from the doc.
+	doc = frappe.get_doc("Bank Connector", connector_name)
+	if not doc.enabled:
+		frappe.throw(frappe._("Bank Connector '{0}' is disabled. Enable it first.").format(connector_name))
+	config = doc.get_connector_config()
 
-	config = get_connector_config(connector_name)
+	# Auto-detect sandbox from the API base URL.
+	is_sandbox = "sandbox" in (config.api_base_url or "").lower()
+	consent_base = _CONSENT_BASE_URLS[is_sandbox]
 
-	sandbox = config.extra.get("sandbox", False)
-	consent_base = _CONSENT_BASE_URLS[bool(sandbox)]
-
-	params = {
-		"client_id": config.client_id,
+	params: dict[str, str] = {
+		"client_id": config.client_id or "",
 		"redirect_uri": config.redirect_uri or "",
 		"response_type": "code",
+		"state": connector_name,
 	}
 	if config.scopes:
 		params["scope"] = ",".join(config.scopes)
 
-	consent_url = f"{consent_base}/app-confirm?{urlencode({k: v for k, v in params.items() if v})}"
+	# Build the consent URL with standard URL-encoding.
+	query_string = urlencode(
+		{k: v for k, v in params.items() if v},
+	).replace("+", "%20")
+	consent_url = f"{consent_base}/app-confirm?{query_string}"
+
+	# Return the consent URL for the user to open.
 	return consent_url
 
 
-@frappe.whitelist(allow_guest=False)
-def oauth_callback(code: str, state: str | None = None) -> str:
+@frappe.whitelist(allow_guest=True)
+def oauth_callback(code: str | None = None, state: str | None = None) -> str:
 	"""Handle the OAuth2 redirect callback from Revolut.
 
 	Exchanges the authorization code for tokens and persists them.
 
 	Args:
 	    code: The authorization code from Revolut.
-	    state: The ``bank_account`` identifier (passed as OAuth state).
+	    state: The ``connector_name`` (passed as OAuth ``state`` param
+	        from :func:`start_oauth_flow`).
 
 	Returns:
 	    A status message.
@@ -598,16 +610,19 @@ def oauth_callback(code: str, state: str | None = None) -> str:
 
 	bank_account = state or "default"
 
-	# The connector_name is not available from the callback directly.
-	# We infer it from the bank_account token record name pattern.
-	# In practice, the caller should configure the redirect_uri with
-	# query params to identify the connector.
+	if state:
+		# Direct lookup via state parameter.
+		doc = frappe.get_doc("Bank Connector", state)
+		config = doc.get_connector_config()
+		if config.provider_name != "revolut":
+			frappe.throw(f"Connector '{state}' is not a Revolut connector.")
+		from erpnext_bank_import.services.oauth import OAuth2Service
 
-	# Find the Bank Connector record by matching the token record.
-	from frappe.utils import get_url
+		oauth = OAuth2Service(config)
+		oauth.exchange_code_for_tokens(code=code, bank_account=bank_account)
+		return f"OAuth2 authorization successful for connector '{state}'."
 
-	# The redirect URI includes the connector_name. For now, iterate
-	# enabled connectors and try the code exchange.
+	# Fallback: iterate enabled connectors (legacy, no state).
 	from erpnext_bank_import.connectors import get_all_enabled_connectors
 
 	for name in get_all_enabled_connectors():

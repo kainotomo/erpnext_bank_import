@@ -33,9 +33,6 @@ class BankConnectorAccountMapping(Document):
 
 	def validate(self) -> None:
 		"""Validate mapping fields and auto-set company/currency from the linked Bank Account."""
-		if not self.provider_account_id:
-			frappe.throw(frappe._("Provider Account ID is required."))
-
 		# Auto-set company and currency from the linked Bank Account.
 		if self.bank_account:
 			bank_ac = frappe.db.get_value(

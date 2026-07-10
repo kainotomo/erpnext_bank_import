@@ -170,20 +170,21 @@ class BankConnector(Document):
 		for r in summary["results"]:
 			if r["error"]:
 				parts.append(
-					_("  {account}: {created} created, {skipped} skipped — error: {err}").format(
+					_("{account}: {created} created, {skipped} skipped — error: {err}").format(
 						account=r["account_id"], created=r["created"], skipped=r["skipped"], err=r["error"]
 					)
 				)
 			else:
 				parts.append(
-					_("  {account}: {created} created, {skipped} skipped").format(
+					_("{account}: {created} created, {skipped} skipped").format(
 						account=r["account_id"], created=r["created"], skipped=r["skipped"]
 					)
 				)
 
-		msg = _("Import complete for {name}:\n{details}").format(
-			name=self.connector_name, details="\n".join(parts)
-		)
+		msg = _("Import complete for {name}").format(name=self.connector_name)
+		if parts:
+			msg += "\n" + "\n".join(parts)
+
 		frappe.msgprint(
 			msg, title=_("Import Results"), indicator="green" if summary["status"] == "success" else "orange"
 		)

@@ -43,6 +43,34 @@ class BankConnector(ABC):
 	Subclasses must provide a concrete implementation of every abstract
 	method.  The base class provides a constructor that stores
 	``config`` and validates it.
+
+	For OAuth2-based providers, the recommended way to implement the
+	auth lifecycle methods is to delegate to
+	``erpnext_bank_import.services.OAuth2Service``:
+
+	.. code-block:: python
+
+	    from erpnext_bank_import.services import OAuth2Service
+
+
+	    class RevolutConnector(BankConnector):
+	        def __init__(self, *args, **kwargs):
+	            super().__init__(*args, **kwargs)
+	            self._oauth = OAuth2Service(self.config)
+
+	        def authenticate(self):
+	            ...  # redirect to authorize URL via self._oauth.get_authorize_url()
+	            # then handle callback via self._oauth.exchange_code_for_tokens()
+
+	        def refresh_token(self):
+	            self._oauth.refresh_access_token(bank_account=...)
+
+	        def is_authenticated(self):
+	            try:
+	                self._oauth.get_valid_access_token(bank_account=...)
+	                return True
+	            except ...:
+	                return False
 	"""
 
 	def __init__(self, config: ConnectorConfig | None = None, **kwargs: Any) -> None:
@@ -73,6 +101,10 @@ class BankConnector(ABC):
 		This method should obtain and store any tokens, certificates,
 		or session state needed for subsequent API calls.
 
+		For OAuth2 providers, delegate to
+		``OAuth2Service.exchange_code_for_tokens()`` after the user
+		has been redirected through the authorization URL.
+
 		Raises:
 		    AuthenticationError: If the credentials are invalid or the
 		        handshake is rejected by the bank.
@@ -85,11 +117,18 @@ class BankConnector(ABC):
 		This method should check token expiry (if applicable) without
 		making an HTTP call, returning ``False`` if re-authentication
 		is needed.
+
+		For OAuth2 providers, delegate to
+		``OAuth2Service.get_valid_access_token()`` and return
+		``True`` if a valid token exists.
 		"""
 
 	@abstractmethod
 	def refresh_token(self) -> None:
 		"""Refresh the authentication token (e.g. OAuth2 refresh flow).
+
+		For OAuth2 providers, delegate to
+		``OAuth2Service.refresh_access_token()``.
 
 		Raises:
 		    AuthenticationError: If the refresh fails (e.g. refresh

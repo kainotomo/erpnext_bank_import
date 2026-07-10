@@ -96,6 +96,14 @@ The CI's **Frappe Linter** job runs `pre-commit run --all-files` followed by **S
 - Creating new files with space indentation — they will fail the formatter hook in CI.
 - Leaving unused unpacked variables (e.g. `txns, next_token = ...` where `next_token` is unused). Use `_` or `[0]` subscript instead.
 - Forgetting to add test dependencies to `[tool.bench.dev-dependencies]` in `pyproject.toml`. Frappe's CI test runner does not have `pytest` installed by default.
+- Omitting `_()` / `frappe._()` translate wrappers on user-facing strings in `frappe.throw()`, `frappe.msgprint()`, and similar calls — the Frappe Semgrep rules enforce this and will fail CI.  Only non-user-facing messages (e.g. debug logs) can skip it.
+- Not running Semgrep locally before pushing.  Pre-commit does **not** include Semgrep — it's a separate CI step.  To catch Semgrep issues early:
+
+  ```bash
+  pip install semgrep
+  git clone --depth 1 https://github.com/frappe/semgrep-rules.git
+  semgrep ci --config ./frappe-semgrep-rules/rules
+  ```
 
 ## Change Management
 

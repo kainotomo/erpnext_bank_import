@@ -7,6 +7,8 @@
 # base class that defines the lifecycle:
 #
 #   1. Authentication  — ``authenticate()`` / ``refresh_token()``
+#      (use ``OAuth2Service`` from ``erpnext_bank_import.services`` for
+#      OAuth2-based providers)
 #   2. Account discovery — ``get_accounts()``
 #   3. Transaction fetch — ``fetch_transactions()`` (paginated)
 #   4. Normalization    — ``normalize_transaction()``
@@ -26,6 +28,10 @@
 #
 # For a worked example, see ``MockProvider`` in ``mock_provider.py``.
 #
+# Shared services (auth, token lifecycle) live in
+# ``erpnext_bank_import.services`` — see ``OAuth2Service`` in
+# ``services/oauth.py``.
+#
 # Provider Registry
 # ------------------
 # Connectors are registered via a simple dict lookup.  Extend
@@ -38,7 +44,7 @@ from erpnext_bank_import.connectors.mock_provider import MockProvider
 
 PROVIDER_REGISTRY: dict[str, type[BankConnector]] = {
 	"mock": MockProvider,
-	# "revolut": RevolutConnector,   # TODO: add in A4
+	# "revolut": RevolutConnector,   # TODO: add in later issue
 	# "bank_of_cyprus": ...,         # TODO: future milestone
 	# "eurobank_cyprus": ...,        # TODO: future milestone
 }

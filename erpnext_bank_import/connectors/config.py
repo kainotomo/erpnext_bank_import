@@ -32,14 +32,37 @@ class ConnectorConfig:
 	client_id: str | None = None
 	"""OAuth2 client identifier (``None`` for API-key-based auth)."""
 
+	client_secret: str | None = None
+	"""OAuth2 client secret.
+
+    Will be persisted via ``Password`` field in the ``Bank Connector
+    Settings`` Single DocType (future issue) or the ``Bank Connector
+    Token`` DocType.  Never hardcode in source.
+    """
+
+	authorize_url: str | None = None
+	"""OAuth2 authorization endpoint relative to ``api_base_url``, or absolute URL."""
+
 	token_url: str | None = None
 	"""OAuth2 token endpoint relative to ``api_base_url``, or absolute URL."""
+
+	revoke_url: str | None = None
+	"""OAuth2 token revocation endpoint relative to ``api_base_url``, or absolute URL."""
+
+	scopes: list[str] = field(default_factory=list)
+	"""OAuth2 scopes requested during authorization (e.g. ``["transactions:read"]``)."""
+
+	redirect_uri: str | None = None
+	"""OAuth2 redirect URI for the authorization code flow."""
 
 	rate_limit_rps: float | None = None
 	"""Maximum requests per second allowed by the bank API, if known."""
 
 	timeout_seconds: float = 30.0
 	"""HTTP request timeout in seconds."""
+
+	token_safety_buffer_seconds: int = 60
+	"""Seconds before hard expiry to treat a token as expired (early refresh)."""
 
 	extra: dict[str, Any] = field(default_factory=dict)
 	"""Provider-specific configuration key-value pairs.

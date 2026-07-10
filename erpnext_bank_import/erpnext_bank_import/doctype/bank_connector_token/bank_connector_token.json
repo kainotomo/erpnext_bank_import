@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "creation": "2026-07-10 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "provider_name",
+  "bank_account",
+  "token_type",
+  "expires_at",
+  "scope",
+  "provider_metadata",
+  "access_token",
+  "refresh_token"
+ ],
+ "fields": [
+  {
+   "fieldname": "provider_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Provider Name",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "bank_account",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Bank Account",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "access_token",
+   "fieldtype": "Password",
+   "label": "Access Token"
+  },
+  {
+   "fieldname": "refresh_token",
+   "fieldtype": "Password",
+   "label": "Refresh Token"
+  },
+  {
+   "fieldname": "token_type",
+   "fieldtype": "Data",
+   "label": "Token Type",
+   "default": "Bearer"
+  },
+  {
+   "fieldname": "expires_at",
+   "fieldtype": "Datetime",
+   "label": "Expires At"
+  },
+  {
+   "fieldname": "scope",
+   "fieldtype": "Small Text",
+   "label": "Scope"
+  },
+  {
+   "fieldname": "provider_metadata",
+   "fieldtype": "JSON",
+   "label": "Provider Metadata"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-10 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Erpnext Bank Import",
+ "name": "Bank Connector Token",
+ "naming_series": "BCT-.{provider_name}-.{bank_account}-.####",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

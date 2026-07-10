@@ -16,6 +16,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 import frappe
+from frappe import _
 from frappe.model.document import Document
 
 from erpnext_bank_import.connectors.config import ConnectorConfig
@@ -140,6 +141,50 @@ class BankConnector(Document):
 			for m in self.account_mappings
 			if m.is_enabled
 		]
+
+	# ------------------------------------------------------------------
+	# Import action
+	# ------------------------------------------------------------------
+
+	@frappe.whitelist()
+	def import_transactions_action(self) -> None:
+		"""Trigger an import for this connector via the UI action button.
+
+		Reads ``date_from`` / ``date_to`` from the form.  If both are
+		blank the import runs in incremental mode (uses
+		``last_synced_at`` per account mapping).  Otherwise it is a
+		backfill for the explicit date window.
+		"""
+		from erpnext_bank_import.services.import_service import import_transactions
+
+		date_from = self.date_from
+		date_to = self.date_to
+
+		summary = import_transactions(
+			connector_name=self.connector_name,
+			date_from=date_from,
+			date_to=date_to,
+		)
+
+		parts: list[str] = []
+		for r in summary["results"]:
+			if r["error"]:
+				parts.append(
+					_("  {account}: {created} created, {skipped} skipped — error: {err}").format(
+						account=r["account_id"], created=r["created"], skipped=r["skipped"], err=r["error"]
+					)
+				)
+			else:
+				parts.append(
+					_("  {account}: {created} created, {skipped} skipped").format(
+						account=r["account_id"], created=r["created"], skipped=r["skipped"]
+					)
+				)
+
+		msg = _("Import complete for {name}:\n{details}").format(
+			name=self.connector_name, details="\n".join(parts)
+		)
+		frappe.msgprint(msg, title=_("Import Results"), indicator="green" if summary["status"] == "success" else "orange")
 
 	# ------------------------------------------------------------------
 	# Internal validators

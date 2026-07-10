@@ -1,6 +1,8 @@
-import frappe
-import erpnext_bank_import
 import unittest
+
+import frappe
+
+import erpnext_bank_import
 
 
 class TestInstallation(unittest.TestCase):

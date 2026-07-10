@@ -75,6 +75,28 @@ Testing approach:
 - Avoid introducing new dependencies unless justified.
 - Preserve backward compatibility of existing behavior unless issue scope requires change.
 
+## Pre-Commit & Linting Discipline
+
+This project uses **tab indentation** (not spaces). All Python files must use tabs to match the project convention.
+
+Before committing, **always run both of these**:
+
+```bash
+ruff check --fix .
+ruff format .
+```
+
+This ensures:
+- Ruff linter rules pass (import sorting, `__all__` ordering, unused variable detection, etc.).
+- Ruff formatter normalises all files to tab indentation.
+
+The CI's **Frappe Linter** job runs `pre-commit run --all-files` followed by **Semgrep rules**. Pre-commit checks **all files** in the repo, not just changed ones. If pre-existing files fail formatting, they must be fixed too — otherwise the CI merge commit will fail.
+
+**Common pitfalls to avoid:**
+- Creating new files with space indentation — they will fail the formatter hook in CI.
+- Leaving unused unpacked variables (e.g. `txns, next_token = ...` where `next_token` is unused). Use `_` or `[0]` subscript instead.
+- Forgetting to add test dependencies to `[tool.bench.dev-dependencies]` in `pyproject.toml`. Frappe's CI test runner does not have `pytest` installed by default.
+
 ## Change Management
 
 - Tie implementation to issue IDs in commit and PR descriptions.

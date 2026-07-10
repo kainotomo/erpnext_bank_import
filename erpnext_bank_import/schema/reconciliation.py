@@ -81,21 +81,19 @@ Principles
 
 
 def assert_no_prohibited_fields(bank_transaction_dict: dict) -> None:
-    """Assert that no prohibited fields are present in *data*.
+	"""Assert that no prohibited fields are present in *data*.
 
-    Intended for use in tests and pre-import validation.
+	Intended for use in tests and pre-import validation.
 
-    Args:
-        bank_transaction_dict: A dict intended for
-            ``frappe.get_doc({"doctype": "Bank Transaction", **data})``.
+	Args:
+	    bank_transaction_dict: A dict intended for
+	        ``frappe.get_doc({"doctype": "Bank Transaction", **data})``.
 
-    Raises:
-        AssertionError: If any prohibited field is present.
-    """
-    from erpnext_bank_import.schema.transaction import PROHIBITED_FIELDS
+	Raises:
+	    AssertionError: If any prohibited field is present.
+	"""
+	from erpnext_bank_import.schema.transaction import PROHIBITED_FIELDS
 
-    present = PROHIBITED_FIELDS & bank_transaction_dict.keys()
-    if present:
-        raise AssertionError(
-            f"Prohibited fields must not be set by the import layer: {sorted(present)}"
-        )
+	present = PROHIBITED_FIELDS & bank_transaction_dict.keys()
+	if present:
+		raise AssertionError(f"Prohibited fields must not be set by the import layer: {sorted(present)}")

@@ -44,6 +44,20 @@ Do not start provider implementation before shared foundations are in place.
 - Avoid logging secrets or full raw credentials.
 - Keep OAuth/token failures actionable but sanitized.
 
+## Implemented Doctypes (Issue A5)
+
+- **`Bank Connector`** (regular DocType, autonamed by `connector_name`): One record per connector instance (supports multi-company, multi-provider). Stores API credentials with `Password` field for `client_secret`. Has child table `account_mappings` (Table → `Bank Connector Account Mapping`).
+- **`Bank Connector Account Mapping`** (child table): Maps `provider_account_id` (bank API account ID) → `bank_account` (Link → `Bank Account`). Auto-fetches `company`/`currency` from the linked Bank Account.
+- To obtain a `ConnectorConfig` from a record: call `doc.get_connector_config()` on a `Bank Connector` doc, or use `erpnext_bank_import.connectors.get_connector_config("connector-name")`.
+- Other entry points: `get_all_enabled_connectors()`, `get_connector_config_by_provider_company(provider, company)`.
+
+## Testing Notes
+
+- Doctype validation tests (`test_bank_connector.py`) require `bench run-tests` — they need a Frappe request context. Do NOT run via `pytest`.
+- Pytest-based tests (`test_connector_config_integration.py`) use mocked Frappe and run standalone with `pytest`.
+- When writing Frappe unittests that need `Bank Account` records, use the `setUpClass` pattern from `test_bank_connector.py` — create `Bank` → `Account` (GL, `account_type="Bank"`) → `Bank Account` in order. The Bank Account autoname is `{account_name} - {bank}`.
+- `ConnectorConfig` dataclass fields (`connectors/config.py`) use `str | None` for optional fields. The DocType controller's `get_connector_config()` uses `_none_if_blank()` to convert empty strings to `None`.
+
 ## Frappe/ERPNext Implementation Rules
 
 - Prefer standard Frappe app layout and naming conventions.

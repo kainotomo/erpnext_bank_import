@@ -606,7 +606,7 @@ def oauth_callback(code: str | None = None, state: str | None = None) -> str:
 	    A status message.
 	"""
 	if not code:
-		frappe.throw("Missing authorization code parameter.")
+		frappe.throw(frappe._("Missing authorization code parameter."))
 
 	bank_account = state or "default"
 
@@ -615,12 +615,12 @@ def oauth_callback(code: str | None = None, state: str | None = None) -> str:
 		doc = frappe.get_doc("Bank Connector", state)
 		config = doc.get_connector_config()
 		if config.provider_name != "revolut":
-			frappe.throw(f"Connector '{state}' is not a Revolut connector.")
+			frappe.throw(frappe._("Connector '{0}' is not a Revolut connector.").format(state))
 		from erpnext_bank_import.services.oauth import OAuth2Service
 
 		oauth = OAuth2Service(config)
 		oauth.exchange_code_for_tokens(code=code, bank_account=bank_account)
-		return f"OAuth2 authorization successful for connector '{state}'."
+		return frappe._("OAuth2 authorization successful for connector '{0}'.").format(state)
 
 	# Fallback: iterate enabled connectors (legacy, no state).
 	from erpnext_bank_import.connectors import get_all_enabled_connectors
@@ -634,13 +634,15 @@ def oauth_callback(code: str | None = None, state: str | None = None) -> str:
 
 			oauth = OAuth2Service(config)
 			oauth.exchange_code_for_tokens(code=code, bank_account=bank_account)
-			return f"OAuth2 authorization successful for connector '{name}'."
+			return frappe._("OAuth2 authorization successful for connector '{0}'.").format(name)
 		except Exception:
 			continue
 
 	frappe.throw(
-		"Could not exchange authorization code. "
-		"Ensure the certificate and redirect URI are correctly configured."
+		frappe._(
+			"Could not exchange authorization code. "
+			"Ensure the certificate and redirect URI are correctly configured."
+		)
 	)
 
 

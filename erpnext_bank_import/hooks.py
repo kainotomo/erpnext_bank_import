@@ -150,9 +150,7 @@ after_install = "erpnext_bank_import.install.after_install"
 # ---------------
 
 scheduler_events = {
-	"hourly": [
-		"erpnext_bank_import.services.import_service.import_all_enabled_connectors"
-	],
+	"hourly": ["erpnext_bank_import.services.import_service.import_all_enabled_connectors"],
 }
 
 # Testing

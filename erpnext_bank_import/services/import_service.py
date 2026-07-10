@@ -19,6 +19,7 @@ Usage
 
     # Scheduled job
     from erpnext_bank_import.services.import_service import import_all_enabled_connectors
+
     import_all_enabled_connectors()
 """
 

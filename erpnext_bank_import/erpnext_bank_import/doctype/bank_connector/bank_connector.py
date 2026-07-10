@@ -184,7 +184,9 @@ class BankConnector(Document):
 		msg = _("Import complete for {name}:\n{details}").format(
 			name=self.connector_name, details="\n".join(parts)
 		)
-		frappe.msgprint(msg, title=_("Import Results"), indicator="green" if summary["status"] == "success" else "orange")
+		frappe.msgprint(
+			msg, title=_("Import Results"), indicator="green" if summary["status"] == "success" else "orange"
+		)
 
 	# ------------------------------------------------------------------
 	# Internal validators

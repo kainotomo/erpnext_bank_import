@@ -285,26 +285,40 @@ class TestBankConnector(unittest.TestCase):
 	# Account mapping validation
 	# ------------------------------------------------------------------
 
-	def test_no_enabled_mappings_when_enabled_raises(self):
-		"""At least one enabled mapping is required when the connector is enabled."""
-		with self.assertRaises(frappe.ValidationError):
-			frappe.get_doc(self._make_connector_dict(account_mappings=[])).insert()
+	def test_no_enabled_mappings_when_enabled_saves(self):
+		"""Connector saves without mappings (mappings can be added later)."""
+		doc = frappe.get_doc(self._make_connector_dict(account_mappings=[]))
+		doc.insert()
+		self.assertTrue(doc.enabled)
 
-	def test_all_mappings_disabled_when_enabled_raises(self):
-		"""If all mappings are disabled, the connector should raise."""
-		with self.assertRaises(frappe.ValidationError):
-			frappe.get_doc(
-				self._make_connector_dict(
-					account_mappings=[
-						{
-							"provider_account_id": "acc-001",
+	def test_all_mappings_disabled_when_enabled_saves(self):
+		"""Connector saves with all mappings disabled."""
+		doc = frappe.get_doc(
+			self._make_connector_dict(
+				account_mappings=[
+					{
+						"provider_account_id": "acc-001",
 							"bank_account": TestBankConnector.TEST_BANK_ACCOUNT,
 							"is_enabled": 0,
 						},
 					],
 				)
 			).insert()
-
+	def test_all_mappings_disabled_when_enabled_saves(self):
+		"""If all mappings are disabled, the connector should still save."""
+		doc = frappe.get_doc(
+			self._make_connector_dict(
+				account_mappings=[
+					{
+						"provider_account_id": "acc-001",
+						"bank_account": TestBankConnector.TEST_BANK_ACCOUNT,
+						"is_enabled": 0,
+					},
+				],
+			)
+		)
+		doc.insert()
+		self.assertTrue(doc.name)
 	def test_disabled_connector_allows_zero_mappings(self):
 		"""A disabled connector should not require any account mappings."""
 		doc = frappe.get_doc(self._make_connector_dict(enabled=0, account_mappings=[]))

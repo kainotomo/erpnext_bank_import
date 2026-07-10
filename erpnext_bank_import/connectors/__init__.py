@@ -39,7 +39,11 @@
 
 from __future__ import annotations
 
+import frappe
+
 from erpnext_bank_import.connectors.base import BankConnector
+from erpnext_bank_import.connectors.config import ConnectorConfig
+from erpnext_bank_import.connectors.exceptions import ConfigurationError
 from erpnext_bank_import.connectors.mock_provider import MockProvider
 
 PROVIDER_REGISTRY: dict[str, type[BankConnector]] = {
@@ -75,6 +79,79 @@ def get_connector(provider: str, **kwargs) -> BankConnector:
 			f"Unknown bank provider {provider!r}. Available providers: {sorted(PROVIDER_REGISTRY)}"
 		) from None
 	return cls(**kwargs)
+
+
+# ------------------------------------------------------------------
+# Bank Connector Doctype integration
+# ------------------------------------------------------------------
+
+
+def get_connector_config(connector_name: str) -> ConnectorConfig:
+	"""Load a ``ConnectorConfig`` from a ``Bank Connector`` DocType record.
+
+	Args:
+	    connector_name: The ``connector_name`` field value of the
+	        ``Bank Connector`` record.
+
+	Returns:
+	    A fully populated ``ConnectorConfig`` dataclass instance.
+
+	Raises:
+	    ConfigurationError: If the record does not exist or is disabled.
+	"""
+	if not frappe.db.exists("Bank Connector", connector_name):
+		raise ConfigurationError(f"Bank Connector '{connector_name}' does not exist.")
+
+	doc = frappe.get_doc("Bank Connector", connector_name)
+
+	if not doc.enabled:
+		raise ConfigurationError(f"Bank Connector '{connector_name}' is disabled.")
+
+	return doc.get_connector_config()
+
+
+def get_all_enabled_connectors() -> list[str]:
+	"""Return the ``connector_name`` of every enabled ``Bank Connector`` record.
+
+	Returns:
+	    A list of connector names suitable for passing to
+	    ``get_connector_config()``.
+	"""
+	records = frappe.db.get_all(
+		"Bank Connector",
+		filters={"enabled": 1},
+		fields=["connector_name"],
+		order_by="connector_name",
+	)
+	return [r["connector_name"] for r in records]
+
+
+def get_connector_config_by_provider_company(provider: str, company: str) -> list[ConnectorConfig]:
+	"""Load ``ConnectorConfig`` for all enabled connectors matching
+	*provider* and *company*.
+
+	Args:
+	    provider: Provider slug (e.g. ``"revolut"``).
+	    company: Company name.
+
+	Returns:
+	    A list of ``ConnectorConfig`` instances (one per matching record).
+	"""
+	records = frappe.db.get_all(
+		"Bank Connector",
+		filters={
+			"provider_name": provider,
+			"company": company,
+			"enabled": 1,
+		},
+		fields=["connector_name"],
+		order_by="connector_name",
+	)
+	result: list[ConnectorConfig] = []
+	for r in records:
+		doc = frappe.get_doc("Bank Connector", r["connector_name"])
+		result.append(doc.get_connector_config())
+	return result
 
 
 __all__ = [

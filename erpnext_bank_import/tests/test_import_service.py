@@ -442,3 +442,161 @@ class TestImportAllConnectorsAggregation:
 			assert all(s["status"] == "success" for s in summaries)
 		finally:
 			patch_get_all.stop()
+
+
+# =========================================================================
+# Idempotency tests
+# =========================================================================
+
+
+class TestImportIdempotency:
+	"""Tests that importing the same data twice produces consistent results."""
+
+	def test_import_twice_produces_identical_results(self, mock_all):
+		"""Second import of same data creates 0 and skips all 30."""
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
+		from erpnext_bank_import.services.import_service import import_transactions
+
+		# First import — all are new
+		result1 = import_transactions("_Test Connector")
+		assert result1["status"] == "success"
+		assert result1["results"][0]["created"] == 30
+		assert result1["results"][0]["skipped"] == 0
+
+		# Simulate that all 30 are now in the database
+		all_ids = [f"mock-txn-{p}-{i}" for p in range(1, 4) for i in range(1, 11)]
+		svc_frappe.get_all.return_value = all_ids
+
+		# Second import — all are skipped
+		result2 = import_transactions("_Test Connector")
+		assert result2["status"] == "success"
+		assert result2["results"][0]["created"] == 0
+		assert result2["results"][0]["skipped"] == 30
+
+	def test_import_with_partial_overlap(self, mock_all):
+		"""With partial existing data, correct split between created and skipped."""
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
+		from erpnext_bank_import.services.import_service import import_transactions
+
+		# Page 1 already exists (10 IDs)
+		existing = [f"mock-txn-1-{i}" for i in range(1, 11)]
+		svc_frappe.get_all.return_value = existing
+
+		result = import_transactions("_Test Connector")
+		r = result["results"][0]
+		assert r["created"] == 20  # pages 2 + 3 (10 each)
+		assert r["skipped"] == 10  # page 1
+
+	def test_import_idempotent_across_triggers(self, mock_all):
+		"""Manual vs Scheduled trigger produces same transaction counts."""
+		from erpnext_bank_import.services.import_service import import_transactions
+
+		result_manual = import_transactions("_Test Connector", trigger="Manual")
+		result_scheduled = import_transactions("_Test Connector", trigger="Scheduled")
+
+		assert result_manual["results"][0]["created"] == result_scheduled["results"][0]["created"]
+		assert result_manual["results"][0]["skipped"] == result_scheduled["results"][0]["skipped"]
+
+	def test_import_handles_duplicate_on_insert(self, mock_all):
+		"""Simulate race condition: insert fails after dedup check passes.
+		The error is logged and processing continues."""
+		from unittest.mock import MagicMock
+
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
+		from erpnext_bank_import.services.import_service import import_transactions
+
+		# get_all returns empty (no known conflicts) - all 30 look new
+		svc_frappe.get_all.return_value = []
+
+		# The mock_all fixture sets up frappe.get_doc with a side_effect.
+		# Keep the Bank Connector / Run Log handling from it, but make
+		# Bank Transaction docs fail insert for the first 3 calls.
+		orig_side_effect = svc_frappe.get_doc.side_effect
+		bt_call_count = [0]
+
+		def _mixed_side_effect(*args, **kwargs):
+			# If called with a dict with doctype "Bank Transaction"
+			if args and isinstance(args[0], dict) and args[0].get("doctype") == "Bank Transaction":
+				bt_call_count[0] += 1
+				doc = MagicMock()
+				doc.name = f"BT-{bt_call_count[0]:04d}"
+				if bt_call_count[0] <= 3:
+					doc.insert.side_effect = Exception("Duplicate entry for key 'transaction_id'")
+				else:
+					doc.insert = MagicMock()
+					doc.submit = MagicMock()
+				return doc
+			return orig_side_effect(*args, **kwargs)
+
+		svc_frappe.get_doc.side_effect = _mixed_side_effect
+
+		result = import_transactions("_Test Connector")
+		r = result["results"][0]
+		# 3 failed (insert raised), 27 succeeded out of 30 total
+		assert r["created"] == 27
+		assert r["error"] is None
+
+
+class TestDedupEdgeCases:
+	"""Edge cases for the dedup query helper ``_get_existing_transaction_ids``."""
+
+	def test_empty_transaction_list_no_db_query(self):
+		"""Empty input list returns empty set without querying DB."""
+		from erpnext_bank_import.services.import_service import _get_existing_transaction_ids
+
+		with patch(
+			"erpnext_bank_import.services.import_service.frappe.get_all",
+		) as m_get_all:
+			result = _get_existing_transaction_ids("BA-001", [])
+			assert result == set()
+			m_get_all.assert_not_called()
+
+	def test_mixed_existing_and_new(self):
+		"""Batch check with some existing IDs returns the correct subset."""
+		from erpnext_bank_import.services.import_service import _get_existing_transaction_ids
+
+		with patch(
+			"erpnext_bank_import.services.import_service.frappe.get_all",
+			return_value=["txn-002", "txn-004"],
+		):
+			result = _get_existing_transaction_ids(
+				"BA-001",
+				["txn-001", "txn-002", "txn-003", "txn-004"],
+			)
+			assert result == {"txn-002", "txn-004"}
+
+	def test_none_exist_returns_empty(self):
+		"""If no transaction IDs exist, return empty set."""
+		from erpnext_bank_import.services.import_service import _get_existing_transaction_ids
+
+		with patch(
+			"erpnext_bank_import.services.import_service.frappe.get_all",
+			return_value=[],
+		):
+			result = _get_existing_transaction_ids("BA-001", ["txn-001", "txn-002"])
+			assert result == set()
+
+	def test_different_bank_accounts_no_dedup(self):
+		"""Same transaction ID on different bank accounts are both created."""
+		from erpnext_bank_import.services.import_service import _get_existing_transaction_ids
+
+		# Simulate: for BA-001 the IDs exist, for BA-002 they don't.
+		# The real frappe.get_all filters by bank_account, so each query is
+		# scoped to that account. We simulate by tracking the bank_account param.
+		def _scoped_get_all(doctype, filters=None, **kwargs):
+			ba = filters.get("bank_account", "") if filters else ""
+			if ba == "BA-001":
+				return ["txn-001"]
+			return []
+
+		with patch(
+			"erpnext_bank_import.services.import_service.frappe.get_all",
+			side_effect=_scoped_get_all,
+		):
+			# txn-001 exists in BA-001
+			result1 = _get_existing_transaction_ids("BA-001", ["txn-001"])
+			assert result1 == {"txn-001"}
+
+			# Same txn-001 does NOT exist in BA-002 (different bank account)
+			result2 = _get_existing_transaction_ids("BA-002", ["txn-001"])
+			assert result2 == set()

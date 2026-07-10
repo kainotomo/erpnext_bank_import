@@ -413,6 +413,115 @@ class TestNormalizationRoundTrip:
 			assert isinstance(txn["amount"], float)
 			assert isinstance(txn["currency"], str)
 			assert isinstance(txn["description"], str)
+
+
+# =========================================================================
+# Deterministic fixture tests
+# =========================================================================
+
+
+class TestFixtureDeterminism:
+	"""Verifies that the mock provider's output is deterministic."""
+
+	def test_deterministic_transactions(self):
+		"""Same inputs always produce the same transaction list."""
+		provider = MockProvider()
+		provider.authenticate()
+
+		txns1 = provider.fetch_all_transactions("mock-acc-001", "2026-01-01", "2026-06-30")
+		txns2 = provider.fetch_all_transactions("mock-acc-001", "2026-01-01", "2026-06-30")
+
+		assert len(txns1) == len(txns2)
+		for t1, t2 in zip(txns1, txns2, strict=True):
+			assert t1["external_id"] == t2["external_id"]
+			assert t1["amount"] == t2["amount"]
+			assert t1["description"] == t2["description"]
+
+	def test_deterministic_accounts(self):
+		"""get_accounts() always returns the same accounts."""
+		provider = MockProvider()
+		provider.authenticate()
+
+		accounts1 = provider.get_accounts()
+		accounts2 = provider.get_accounts()
+
+		assert len(accounts1) == len(accounts2)
+		for a1, a2 in zip(accounts1, accounts2, strict=True):
+			assert a1.account_id == a2.account_id
+			assert a1.account_name == a2.account_name
+			assert a1.currency == a2.currency
+
+	def test_deterministic_pagination(self):
+		"""Same paging parameters always produce the same page contents."""
+		provider = MockProvider()
+		provider.authenticate()
+
+		for _ in range(3):
+			page1, _ = provider.fetch_transactions("mock-acc-001", "2026-01-01", "2026-06-30", page_token="1")
+			page2, _ = provider.fetch_transactions("mock-acc-001", "2026-01-01", "2026-06-30", page_token="1")
+			assert len(page1) == len(page2)
+			for t1, t2 in zip(page1, page2, strict=True):
+				assert t1["external_id"] == t2["external_id"]
+
+	def test_deterministic_account_count_from_config(self):
+		"""MockProvider with same account_count always returns same accounts."""
+		provider1 = MockProvider(account_count=2)
+		provider1.authenticate()
+		provider2 = MockProvider(account_count=2)
+		provider2.authenticate()
+
+		acc1 = provider1.get_accounts()
+		acc2 = provider2.get_accounts()
+		assert len(acc1) == len(acc2) == 2
+		for a1, a2 in zip(acc1, acc2, strict=True):
+			assert a1.account_id == a2.account_id
+
+
+class TestFixtureFailurePaths:
+	"""Verifies that failure modes are deterministic and consistent."""
+
+	def test_auth_failure_is_deterministic(self):
+		"""auth_should_fail=True always raises AuthenticationError."""
+		provider = MockProvider(auth_should_fail=True)
+		for _ in range(3):
+			with pytest.raises(AuthenticationError, match="auth_should_fail"):
+				provider.authenticate()
+
+	def test_refresh_failure_is_deterministic(self):
+		"""refresh_token with auth_should_fail=True always raises."""
+		provider = MockProvider(auth_should_fail=True)
+		for _ in range(3):
+			with pytest.raises(AuthenticationError, match="auth_should_fail"):
+				provider.refresh_token()
+
+	def test_normalization_failure_for_malformed_data(self):
+		"""Missing required fields always raises NormalizationError."""
+		provider = MockProvider()
+		raw = {
+			"external_id": "txn-bad",
+			"date": "2026-06-15",
+			# "amount" is missing
+			"currency": "EUR",
+			"description": "Broken transaction",
+		}
+		for _ in range(3):
+			with pytest.raises(NormalizationError, match="amount"):
+				provider.normalize_transaction(raw)
+
+	def test_fetch_requires_auth_deterministic(self):
+		"""Unauthenticated fetch always raises AuthenticationError."""
+		provider = MockProvider()
+		for _ in range(3):
+			with pytest.raises(AuthenticationError, match="Not authenticated"):
+				provider.fetch_transactions("mock-acc-001", "2026-01-01", "2026-06-30")
+
+	def test_auth_success_then_fetch_works(self):
+		"""After successful auth, fetch works consistently."""
+		provider = MockProvider()
+		provider.authenticate()
+		for _ in range(3):
+			txns, _next_token = provider.fetch_transactions("mock-acc-001", "2026-01-01", "2026-06-30")
+			assert len(txns) == provider._transactions_per_page
 			# Optional fields should be str, float, or None
 			for opt_field in [
 				"reference_number",
@@ -421,9 +530,11 @@ class TestNormalizationRoundTrip:
 				"bank_party_iban",
 				"transaction_type",
 			]:
-				assert txn[opt_field] is None or isinstance(txn[opt_field], str)
+				for txn in txns:
+					assert txn[opt_field] is None or isinstance(txn[opt_field], str)
 			for fee_field in ["included_fee", "excluded_fee"]:
-				assert txn[fee_field] is None or isinstance(txn[fee_field], float)
+				for txn in txns:
+					assert txn[fee_field] is None or isinstance(txn[fee_field], float)
 
 
 # =========================================================================

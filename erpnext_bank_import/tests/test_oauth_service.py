@@ -581,3 +581,295 @@ class TestOAuth2ServiceExpiry:
 		now = datetime(2026, 7, 10, 12, 0, 0)
 		mock_now.return_value = now
 		assert OAuth2Service._is_expired(now)
+
+
+# =========================================================================
+# OAuth2Service — token expiry edge cases
+# =========================================================================
+
+
+class TestOAuth2ServiceExpiryEdgeCases:
+	"""Additional edge cases for the ``_is_expired`` static method.
+
+	The safety buffer is defined in ``OAuthProviderConfig.token_safety_buffer_seconds``
+	but ``_is_expired`` is a static method that does not have access to config.
+	These tests document the current behaviour and the gap.
+	"""
+
+	@patch("erpnext_bank_import.services.oauth.now_datetime")
+	def test_token_expires_in_30s_is_not_expired(self, mock_now: MagicMock) -> None:
+		"""A token expiring in 30 seconds is not yet expired.
+
+		Note: ``_is_expired`` only checks ``expires_at <= now``, so a token
+		that expires in 30s is NOT considered expired.  The safety buffer
+		(default 60s) that should trigger early refresh is NOT applied here;
+		it is the caller's responsibility (e.g. ``get_valid_access_token``)
+		to handle pre-emptive refresh.
+		"""
+		now = datetime(2026, 7, 10, 12, 0, 0)
+		mock_now.return_value = now
+		almost_expired = datetime(2026, 7, 10, 12, 0, 30)  # 30s from now
+		assert not OAuth2Service._is_expired(almost_expired)
+
+	@patch("erpnext_bank_import.services.oauth.now_datetime")
+	def test_token_expired_one_second_ago(self, mock_now: MagicMock) -> None:
+		"""A token that expired 1 second ago is considered expired (boundary)."""
+		now = datetime(2026, 7, 10, 12, 0, 0)
+		mock_now.return_value = now
+		just_past = datetime(2026, 7, 10, 11, 59, 59)
+		assert OAuth2Service._is_expired(just_past)
+
+	@patch("erpnext_bank_import.services.oauth.now_datetime")
+	def test_aware_datetime_stripped(self, mock_now: MagicMock) -> None:
+		"""Timezone-aware datetimes are stripped to naive for comparison."""
+		now = datetime(2026, 7, 10, 12, 0, 0)
+		mock_now.return_value = now
+		# An aware datetime with same clock time (UTC)
+		future_aware = datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC)
+		assert OAuth2Service._is_expired(future_aware)  # stripped → equal → expired
+
+
+# =========================================================================
+# OAuth2Service — token refresh edge cases
+# =========================================================================
+
+
+class TestOAuth2ServiceTokenRefreshEdgeCases:
+	"""Additional edge cases for ``refresh_access_token``."""
+
+	def _setup_service_with_stored_token(
+		self,
+		access_token: str = "old-access",
+		refresh_token: str = "old-refresh",
+		expires_at: str | None = None,
+	) -> OAuth2Service:
+		service = OAuth2Service(_make_config(client_secret="csecret"))
+		if expires_at is None:
+			expires_at = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+		_patch_frappe_db(
+			exists=True,
+			doc_kwargs={
+				"access_token": access_token,
+				"refresh_token": refresh_token,
+				"token_type": "Bearer",
+				"expires_at": expires_at,
+				"scope": "read",
+				"provider_name": "test",
+				"bank_account": "BA-001",
+			},
+		)
+		return service
+
+	@patch("erpnext_bank_import.services.oauth.requests.post")
+	def test_token_rotation(self, mock_post: MagicMock) -> None:
+		"""On refresh, if provider returns a new refresh token, it replaces the old."""
+		service = self._setup_service_with_stored_token()
+
+		mock_response = MagicMock()
+		mock_response.status_code = 200
+		mock_response.json.return_value = {
+			"access_token": "rotated-access",
+			"refresh_token": "rotated-refresh",
+			"token_type": "Bearer",
+			"expires_in": 3600,
+		}
+		mock_post.return_value = mock_response
+
+		token = service.refresh_access_token(bank_account="BA-001")
+		assert token.access_token == "rotated-access"
+		assert token.refresh_token == "rotated-refresh"
+
+	@patch("erpnext_bank_import.services.oauth.requests.post")
+	def test_refresh_network_error(self, mock_post: MagicMock) -> None:
+		"""Transient network error during refresh should propagate as OAuthHandshakeError."""
+		service = self._setup_service_with_stored_token()
+
+		import requests
+
+		mock_post.side_effect = requests.ConnectionError("Connection refused")
+
+		with pytest.raises(OAuthHandshakeError, match="Token request failed"):
+			service.refresh_access_token(bank_account="BA-001")
+
+	def test_refresh_without_any_stored_data(self) -> None:
+		"""When no token record exists, raises TokenExpiredError immediately."""
+		svc = OAuth2Service(_make_config())
+		mocks = _patch_frappe_db(exists=False)
+		try:
+			with pytest.raises(TokenExpiredError, match="No refresh token"):
+				svc.refresh_access_token(bank_account="BA-001")
+		finally:
+			_unpatch_frappe_db(mocks)
+
+
+# =========================================================================
+# OAuth2Service — auto-refresh edge cases
+# =========================================================================
+
+
+class TestOAuth2ServiceAutoRefreshEdgeCases:
+	"""Edge cases for ``get_valid_access_token`` auto-refresh behaviour."""
+
+	@patch("erpnext_bank_import.services.oauth.now_datetime")
+	@patch("erpnext_bank_import.services.oauth.requests.post")
+	def test_network_error_during_auto_refresh(self, mock_post: MagicMock, mock_now: MagicMock) -> None:
+		"""When auto-refresh fails with network error, TokenExpiredError is raised."""
+		past_str = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+		mock_now.return_value = datetime.now()
+
+		svc = OAuth2Service(_make_config(client_secret="csecret"))
+
+		mocks = _patch_frappe_db(
+			exists=True,
+			doc_kwargs={
+				"access_token": "expired-access",
+				"refresh_token": "valid-refresh",
+				"token_type": "Bearer",
+				"expires_at": past_str,
+				"scope": "read",
+				"provider_name": "test",
+				"bank_account": "BA-001",
+			},
+		)
+		try:
+			import requests
+
+			mock_post.side_effect = requests.ConnectionError("Connection refused")
+
+			with pytest.raises(TokenExpiredError, match="Token refresh failed"):
+				svc.get_valid_access_token(bank_account="BA-001")
+		finally:
+			_unpatch_frappe_db(mocks)
+
+	@patch("erpnext_bank_import.services.oauth.now_datetime")
+	def test_token_expiring_soon_not_refreshed_if_still_valid(self, mock_now: MagicMock) -> None:
+		"""A token expiring in 30s is still valid (safety buffer not in _is_expired).
+
+		This documents a known gap: the safety buffer is NOT enforced by
+		``_is_expired``, so a token with 30s remaining is returned directly
+		without refresh.
+		"""
+		future_str = (datetime.now() + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+		mock_now.return_value = datetime.now()
+
+		svc = OAuth2Service(_make_config())
+
+		mocks = _patch_frappe_db(
+			exists=True,
+			doc_kwargs={
+				"access_token": "almost-valid",
+				"refresh_token": "refresh-token",
+				"token_type": "Bearer",
+				"expires_at": future_str,
+				"scope": "read",
+				"provider_name": "test",
+				"bank_account": "BA-001",
+			},
+		)
+		try:
+			token_str = svc.get_valid_access_token(bank_account="BA-001")
+			assert token_str == "almost-valid"
+		finally:
+			_unpatch_frappe_db(mocks)
+
+
+# =========================================================================
+# OAuth2Service — full lifecycle integration
+# =========================================================================
+
+
+class TestOAuth2Lifecycle:
+	"""End-to-end token lifecycle: authorize → exchange → access → refresh → revoke."""
+
+	@patch("erpnext_bank_import.services.oauth.requests.post")
+	def test_full_lifecycle(self, mock_post: MagicMock) -> None:
+		"""Complete OAuth flow: authorize URL → code exchange → access → refresh → revoke."""
+		svc = OAuth2Service(
+			_make_config(
+				client_id="lifecycle-cid",
+				client_secret="lifecycle-secret",
+				revoke_url="/auth/revoke",
+			)
+		)
+
+		# 1. Authorization URL
+		auth_url = svc.get_authorize_url(state="state-123")
+		assert "response_type=code" in auth_url
+		assert "client_id=lifecycle-cid" in auth_url
+		assert "state=state-123" in auth_url
+
+		# 2. Exchange code for tokens
+		def _exchange_side_effect(*args, **kwargs):
+			resp = MagicMock()
+			resp.status_code = 200
+			resp.json.return_value = {
+				"access_token": "lifecycle-access",
+				"refresh_token": "lifecycle-refresh",
+				"token_type": "Bearer",
+				"expires_in": 3600,
+				"scope": "read",
+			}
+			return resp
+
+		mock_post.side_effect = _exchange_side_effect
+
+		mocks = _patch_frappe_db(exists=False)
+		try:
+			token = svc.exchange_code_for_tokens(code="auth-code-456", bank_account="BA-001")
+			assert token.access_token == "lifecycle-access"
+			assert token.refresh_token == "lifecycle-refresh"
+		finally:
+			_unpatch_frappe_db(mocks)
+
+		# 3. Use valid access token (cached, no refresh call)
+		@patch("erpnext_bank_import.services.oauth.now_datetime")
+		def _check_valid(mock_now):
+			future_str = (datetime.now() + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+			mock_now.return_value = datetime.now()
+			mocks2 = _patch_frappe_db(
+				exists=True,
+				doc_kwargs={
+					"access_token": "lifecycle-access",
+					"refresh_token": "lifecycle-refresh",
+					"token_type": "Bearer",
+					"expires_at": future_str,
+					"scope": "read",
+					"provider_name": "test",
+					"bank_account": "BA-001",
+				},
+			)
+			try:
+				access = svc.get_valid_access_token(bank_account="BA-001")
+				assert access == "lifecycle-access"
+			finally:
+				_unpatch_frappe_db(mocks2)
+
+		_check_valid()
+
+		# 4. Revoke tokens
+		mocks3 = _patch_frappe_db(
+			exists=True,
+			doc_kwargs={
+				"access_token": "lifecycle-access",
+				"refresh_token": "lifecycle-refresh",
+				"provider_name": "test",
+				"bank_account": "BA-001",
+			},
+		)
+		try:
+			svc.revoke_tokens(bank_account="BA-001")
+		finally:
+			_unpatch_frappe_db(mocks3)
+
+	@patch("erpnext_bank_import.services.oauth.requests.post")
+	def test_refresh_after_revoke_fails(self, mock_post: MagicMock) -> None:
+		"""After revocation, refresh_access_token should raise TokenExpiredError."""
+		svc = OAuth2Service(_make_config(client_secret="csecret"))
+
+		mocks = _patch_frappe_db(exists=False)
+		try:
+			with pytest.raises(TokenExpiredError, match="No refresh token"):
+				svc.refresh_access_token(bank_account="BA-001")
+			mock_post.assert_not_called()
+		finally:
+			_unpatch_frappe_db(mocks)

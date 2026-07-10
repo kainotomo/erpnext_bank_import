@@ -188,3 +188,75 @@ class TestRunLoggerAccountResults:
 		results = run.account_results
 		assert results[0]["date_from"] == "2026-01-01"
 		assert results[0]["date_to"] == "2026-01-31"
+
+
+# =========================================================================
+# RunLog idempotency tests
+# =========================================================================
+
+
+class TestRunLogIdempotency:
+	"""Tests that RunLogger produces consistent results for the same inputs."""
+
+	def test_consistent_output_for_same_input(self, mock_frappe):
+		"""Same add_account_result calls produce identical per_account_results."""
+		from erpnext_bank_import.services.run_log import RunLogger
+
+		def _run() -> str:
+			with RunLogger("Test Connector", "mock") as run:
+				run.add_account_result(account_id="acc-001", created=5, skipped=2)
+				run.add_account_result(account_id="acc-002", created=3, skipped=1)
+			# Capture the per_account_results written to the DB
+			calls = [c for c in mock_frappe.db.set_value.call_args_list]
+			field_values = calls[-1][0][2]
+			return field_values.get("per_account_results", "")
+
+		result1 = _run()
+		mock_frappe.db.set_value.reset_mock()
+		result2 = _run()
+		assert result1 == result2
+
+	def test_total_counts_accurate_after_multiple_adds(self, mock_frappe):
+		"""Totals are recomputed correctly when same account is added multiple times."""
+		from erpnext_bank_import.services.run_log import RunLogger
+
+		with RunLogger("Test Connector", "mock") as run:
+			run.add_account_result(account_id="acc-001", created=5, skipped=2)
+			run.add_account_result(account_id="acc-001", created=3, skipped=1)  # same account twice
+
+		set_value_calls = mock_frappe.db.set_value.call_args
+		field_values = set_value_calls[0][2]
+		# totals are sum of ALL results, not deduplicated by account
+		assert field_values["total_created"] == 8
+		assert field_values["total_skipped"] == 3
+
+	def test_status_transitions_deterministic(self, mock_frappe):
+		"""Status is deterministic: Partial if any error, Success otherwise."""
+		from erpnext_bank_import.services.run_log import RunLogger
+
+		# No errors → Success
+		with RunLogger("Test Connector", "mock") as run:
+			run.add_account_result(account_id="acc-001", created=5, skipped=0)
+		status1 = mock_frappe.db.set_value.call_args[0][2]["status"]
+		assert status1 == "Success"
+
+		mock_frappe.db.set_value.reset_mock()
+
+		# With errors → Partial
+		with RunLogger("Test Connector", "mock") as run:
+			run.add_account_result(account_id="acc-001", created=5, skipped=0)
+			run.add_account_result(account_id="acc-002", created=0, skipped=0, error="Auth failed")
+		status2 = mock_frappe.db.set_value.call_args[0][2]["status"]
+		assert status2 == "Partial"
+
+	def test_no_account_results_still_success(self, mock_frappe):
+		"""Zero account results → status is Success with zero counts."""
+		from erpnext_bank_import.services.run_log import RunLogger
+
+		with RunLogger("Test Connector", "mock"):
+			pass
+
+		field_values = mock_frappe.db.set_value.call_args[0][2]
+		assert field_values["status"] == "Success"
+		assert field_values["total_created"] == 0
+		assert field_values["total_skipped"] == 0

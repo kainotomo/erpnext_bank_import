@@ -7,3 +7,7 @@
 # Modules:
 #   transaction    — NormalizedTransaction TypedDict, field map, and mapping helper
 #   reconciliation — ERPNext reconciliation primitives reused by this app
+#
+# See also:
+#   erpnext_bank_import.connectors  — BankConnector ABC and provider implementations
+#     that produce NormalizedTransaction dicts consumed by this package.

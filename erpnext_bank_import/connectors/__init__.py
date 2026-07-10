@@ -37,10 +37,10 @@ from erpnext_bank_import.connectors.base import BankConnector
 from erpnext_bank_import.connectors.mock_provider import MockProvider
 
 PROVIDER_REGISTRY: dict[str, type[BankConnector]] = {
-    "mock": MockProvider,
-    # "revolut": RevolutConnector,   # TODO: add in A4
-    # "bank_of_cyprus": ...,         # TODO: future milestone
-    # "eurobank_cyprus": ...,        # TODO: future milestone
+	"mock": MockProvider,
+	# "revolut": RevolutConnector,   # TODO: add in A4
+	# "bank_of_cyprus": ...,         # TODO: future milestone
+	# "eurobank_cyprus": ...,        # TODO: future milestone
 }
 """Mapping from provider slug to ``BankConnector`` subclass.
 
@@ -50,31 +50,30 @@ them by name (see ``get_connector()``).
 
 
 def get_connector(provider: str, **kwargs) -> BankConnector:
-    """Factory: return an instance of the connector for *provider*.
+	"""Factory: return an instance of the connector for *provider*.
 
-    Args:
-        provider: Provider slug (e.g. ``"mock"``, ``"revolut"``).
-        **kwargs: Forwarded to the connector's constructor.
+	Args:
+	    provider: Provider slug (e.g. ``"mock"``, ``"revolut"``).
+	    **kwargs: Forwarded to the connector's constructor.
 
-    Returns:
-        An initialised ``BankConnector`` instance.
+	Returns:
+	    An initialised ``BankConnector`` instance.
 
-    Raises:
-        KeyError: If *provider* is not registered.
-    """
-    try:
-        cls = PROVIDER_REGISTRY[provider]
-    except KeyError:
-        raise KeyError(
-            f"Unknown bank provider {provider!r}. "
-            f"Available providers: {sorted(PROVIDER_REGISTRY)}"
-        ) from None
-    return cls(**kwargs)
+	Raises:
+	    KeyError: If *provider* is not registered.
+	"""
+	try:
+		cls = PROVIDER_REGISTRY[provider]
+	except KeyError:
+		raise KeyError(
+			f"Unknown bank provider {provider!r}. Available providers: {sorted(PROVIDER_REGISTRY)}"
+		) from None
+	return cls(**kwargs)
 
 
 __all__ = [
-    "BankConnector",
-    "MockProvider",
-    "PROVIDER_REGISTRY",
-    "get_connector",
+	"PROVIDER_REGISTRY",
+	"BankConnector",
+	"MockProvider",
+	"get_connector",
 ]

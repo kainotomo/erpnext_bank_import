@@ -21,65 +21,65 @@ from __future__ import annotations
 
 
 class ConnectorError(Exception):
-    """Base exception for all bank connector failures."""
+	"""Base exception for all bank connector failures."""
 
 
 class AuthenticationError(ConnectorError):
-    """Raised when authentication or token refresh fails.
+	"""Raised when authentication or token refresh fails.
 
-    Possible causes: invalid credentials, expired token that cannot be
-    refreshed, or an OAuth handshake rejection.
-    """
+	Possible causes: invalid credentials, expired token that cannot be
+	refreshed, or an OAuth handshake rejection.
+	"""
 
 
 class RateLimitError(ConnectorError):
-    """Raised when the bank API rate limit is exceeded (HTTP 429).
+	"""Raised when the bank API rate limit is exceeded (HTTP 429).
 
-    The caller should back off and retry.  Implementations MAY attach
-    a ``retry_after`` attribute (seconds) if the API provides it.
-    """
+	The caller should back off and retry.  Implementations MAY attach
+	a ``retry_after`` attribute (seconds) if the API provides it.
+	"""
 
-    def __init__(self, message: str = "", retry_after: float | None = None) -> None:
-        self.retry_after = retry_after
-        super().__init__(message)
+	def __init__(self, message: str = "", retry_after: float | None = None) -> None:
+		self.retry_after = retry_after
+		super().__init__(message)
 
 
 class ApiError(ConnectorError):
-    """Raised on an unsuccessful HTTP response from the bank API.
+	"""Raised on an unsuccessful HTTP response from the bank API.
 
-    Attributes:
-        status_code: HTTP status code.
-        response_body: Raw response text, if available.
-    """
+	Attributes:
+	    status_code: HTTP status code.
+	    response_body: Raw response text, if available.
+	"""
 
-    def __init__(
-        self,
-        message: str = "",
-        status_code: int | None = None,
-        response_body: str | None = None,
-    ) -> None:
-        self.status_code = status_code
-        self.response_body = response_body
-        super().__init__(message)
+	def __init__(
+		self,
+		message: str = "",
+		status_code: int | None = None,
+		response_body: str | None = None,
+	) -> None:
+		self.status_code = status_code
+		self.response_body = response_body
+		super().__init__(message)
 
 
 class ConfigurationError(ConnectorError):
-    """Raised when the connector configuration is invalid or incomplete."""
+	"""Raised when the connector configuration is invalid or incomplete."""
 
 
 class NormalizationError(ConnectorError):
-    """Raised when a raw transaction dict cannot be normalised.
+	"""Raised when a raw transaction dict cannot be normalised.
 
-    This typically indicates a missing required field or a data-type
-    mismatch in the bank API response.
-    """
+	This typically indicates a missing required field or a data-type
+	mismatch in the bank API response.
+	"""
 
 
 __all__ = [
-    "ConnectorError",
-    "AuthenticationError",
-    "RateLimitError",
-    "ApiError",
-    "ConfigurationError",
-    "NormalizationError",
+	"ApiError",
+	"AuthenticationError",
+	"ConfigurationError",
+	"ConnectorError",
+	"NormalizationError",
+	"RateLimitError",
 ]

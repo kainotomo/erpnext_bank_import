@@ -48,10 +48,9 @@ class BankConnectorToken(Document):
 			{"provider_name": self.provider_name, "bank_account": self.bank_account},
 		):
 			frappe.throw(
-				frappe._(
-					"A token record already exists for provider '{0}' "
-					"and bank account '{1}'."
-				).format(self.provider_name, self.bank_account)
+				frappe._("A token record already exists for provider '{0}' and bank account '{1}'.").format(
+					self.provider_name, self.bank_account
+				)
 			)
 
 

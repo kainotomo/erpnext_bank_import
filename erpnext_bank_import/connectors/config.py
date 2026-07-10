@@ -3,8 +3,14 @@
 These are plain Python dataclasses, not Frappe DocTypes.  They define
 the typed contract between the orchestration layer and connector implementations.
 
-Frappe-specific persistence (e.g. a ``Bank Connector Settings`` Single DocType)
-will be built in a later issue and mapped to these dataclasses.
+Frappe-side persistence is provided by the ``Bank Connector`` DocType
+(in ``erpnext_bank_import.erpnext_bank_import.doctype.bank_connector``),
+which stores credentials (including encrypted ``client_secret``) and
+account mappings.  Call ``doc.get_connector_config()`` on a ``Bank
+Connector`` record to obtain a ``ConnectorConfig`` instance.
+
+See ``erpnext_bank_import.connectors.get_connector_config()`` for the
+primary entry point.
 """
 
 from __future__ import annotations

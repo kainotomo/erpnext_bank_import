@@ -149,23 +149,9 @@ after_install = "erpnext_bank_import.install.after_install"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"erpnext_bank_import.tasks.all"
-# 	],
-# 	"daily": [
-# 		"erpnext_bank_import.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"erpnext_bank_import.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"erpnext_bank_import.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"erpnext_bank_import.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"hourly": ["erpnext_bank_import.services.import_service.import_all_enabled_connectors"],
+}
 
 # Testing
 # -------

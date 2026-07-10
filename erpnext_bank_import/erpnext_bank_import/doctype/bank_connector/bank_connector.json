@@ -1,5 +1,10 @@
 {
- "actions": [],
+ "actions": [
+  {
+   "action": "import_transactions_action",
+   "label": "Import Transactions"
+  }
+ ],
  "autoname": "field:connector_name",
  "creation": "2026-07-10 00:00:00",
  "doctype": "DocType",
@@ -24,7 +29,10 @@
   "redirect_uri",
   "token_safety_buffer_seconds",
   "sb_mappings",
-  "account_mappings"
+  "account_mappings",
+  "sb_import",
+  "date_from",
+  "date_to"
  ],
  "fields": [
   {
@@ -152,6 +160,24 @@
    "fieldtype": "Table",
    "label": "Account Mappings",
    "options": "Bank Connector Account Mapping"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "sb_import",
+   "fieldtype": "Section Break",
+   "label": "Import Options"
+  },
+  {
+   "description": "Leave blank for incremental sync (from last synced date).",
+   "fieldname": "date_from",
+   "fieldtype": "Date",
+   "label": "Import From Date"
+  },
+  {
+   "description": "Leave blank to import up to today.",
+   "fieldname": "date_to",
+   "fieldtype": "Date",
+   "label": "Import To Date"
   }
  ],
  "index_web_pages_for_search": 1,

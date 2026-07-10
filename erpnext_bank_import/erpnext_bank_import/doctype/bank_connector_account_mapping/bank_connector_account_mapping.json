@@ -10,7 +10,8 @@
   "bank_account",
   "company",
   "currency",
-  "is_enabled"
+  "is_enabled",
+  "last_synced_at"
  ],
  "fields": [
   {
@@ -57,6 +58,13 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Is Enabled"
+  },
+  {
+   "fieldname": "last_synced_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Last Synced At",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,

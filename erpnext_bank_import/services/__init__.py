@@ -9,10 +9,13 @@
 
 from __future__ import annotations
 
+from erpnext_bank_import.services.import_service import import_all_enabled_connectors, import_transactions
 from erpnext_bank_import.services.oauth import OAuth2Service, OAuthProviderConfig, OAuthToken
 
 __all__ = [
 	"OAuth2Service",
 	"OAuthProviderConfig",
 	"OAuthToken",
+	"import_all_enabled_connectors",
+	"import_transactions",
 ]

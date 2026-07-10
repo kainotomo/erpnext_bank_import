@@ -38,6 +38,12 @@ class TestBankConnector(unittest.TestCase):
 		_abbr = "_TC"
 
 		# ------------------------------------------------------------------
+		# Warehouse Type (required by ERPNext's Company on_update hooks)
+		# ------------------------------------------------------------------
+		if not frappe.db.exists("Warehouse Type", "Transit"):
+			frappe.get_doc({"doctype": "Warehouse Type", "name": "Transit"}).insert()
+
+		# ------------------------------------------------------------------
 		# Company
 		# ------------------------------------------------------------------
 		if not frappe.db.exists("Company", _company):

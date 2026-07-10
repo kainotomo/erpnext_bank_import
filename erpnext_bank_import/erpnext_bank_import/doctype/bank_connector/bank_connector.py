@@ -44,6 +44,8 @@ class BankConnector(Document):
 		company: DF.Link
 		connector_name: DF.Data
 		enabled: DF.Check
+		jwt_issuer: DF.Data | None
+		jwt_private_key: DF.Password | None
 		provider_name: DF.Literal["revolut", "mock"]
 		rate_limit_rps: DF.Float | None
 		redirect_uri: DF.Data | None
@@ -117,6 +119,8 @@ class BankConnector(Document):
 			rate_limit_rps=self.rate_limit_rps,
 			timeout_seconds=self.timeout_seconds or 30.0,
 			token_safety_buffer_seconds=self.token_safety_buffer_seconds or 60,
+			jwt_private_key=self.get_password("jwt_private_key") if self.jwt_private_key else None,
+			jwt_issuer=self._none_if_blank(self.jwt_issuer),
 		)
 
 	@staticmethod

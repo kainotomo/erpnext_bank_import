@@ -873,3 +873,184 @@ class TestOAuth2Lifecycle:
 			mock_post.assert_not_called()
 		finally:
 			_unpatch_frappe_db(mocks)
+
+
+# =========================================================================
+# JWT client assertion tests
+# =========================================================================
+
+
+# A 2048-bit RSA private key for testing JWT signing (PKCS#1 format).
+_TEST_PRIVATE_KEY = """-----BEGIN RSA PRIVATE KEY-----
+MIIEogIBAAKCAQEAj8H/8k4Tr0CP02DqsF6Vl2PjDCJ0MZvZpO6qprJqO0395UVe
+CmiPD5pP/zDaPzbnq50Uut/QPWcCCKYViklBjPWazua8dCeO/DMLa93UzHhaYdQb
+NWrqRykv+p4uso7HJOkzrt1vy4jyZgagFrQGXMXcsFEQwsgCiD3NMIHRk3T2kjZc
+nRJdtJneAcF6qk2aBu8CYUea+Ad6pi1Di/ofjWwiS15XsyZQVM8nktpcPynSb6bz
+O43xgBxaIWCiSfNS75EsmOOxFqyQBRjVogwqWQTzgPgHo1D2zmeHXjyyAPahCO3o
+iaFaQf2fJhhy+OSXXnjaVizPIYeLU0boH+fuTwIDAQABAoIBAAu1b4fIP9vbzyXB
+HzcF6nrd+ghV0WSYVDCV9ynu89kTCqAUYiBIkN0NTVZfH7+F/3Y1AT277KWQ+2js
+l2o1JOolYkUCJQz0NeCpCv/vnZ1DxjTGm6q3o7pFCrEya2JECnNMAoIhFgccBzDe
+eZvacNQ4kgzS+sxVPGOQCQ4vh1F9ANzZF9WFIZXP177tM4jeNMRA2vkelHSw0Xpg
+zYJl/KpWGiNvTwYvcep78Su8GNofG6pr2ksQ97XAAGWNplFX24sQxEGdMKp6K+TN
+EgmdSd0+2Jt6MaZ0ONaPO+DaafGrALCJz8bokAbwvVSFqPtvF5zAmEvWzI/KXvgs
+wWBpmFECgYEAxv7sTCLsBtyiBE/dEbVmmmlur94WDVhG6HUpdiptb1RhjAIE4up9
+LDiqNliptUOzUFTz5pOo1lpMIhNaSJl+tamEPKL3fgzLiosRpP/SK+aHbmhrpc2/
+hYIhqkLwmSAK40Ocfb3tw7C1PkpCBl2tUxYnKNwEVzSaDnZQHwlLCH8CgYEAuPBG
+6AKGPL2JtWJ1MZWD6FtX3ZadWL5gkmv92knblCiyxDClEwjbJFpnECUND+hBzYsR
+Vejwhe1a1sY0A5YV2gzP3IbZ12dkUyYBM+j5pjVCh1vD46M7lLwKBWuhppZMYvcl
+3utOef/dV/tOuPgoa8jdXXaWqQYV7+hqYandsjECgYAqM+hTYVijP+mQdouQ9OLU
+vqV94ODWZbFsHWT0rZzV7pRdiBQXN9niJgZbTkR3r+r4j3vGm+xDwZTB6U7NdNg9
+mLz1yy4n6njEYigU0Th2nQZ98OFboZ4Lp4SSQm4aW4RTnIQ02rHxPanCkycbiIR4
+yYr2jGrTP9GoXYkye9sQ6wKBgH0CjiuOaUbtqARgBW/67StHc2FpyfqO1aCkNvgz
+LKY9zHkpmKwBNICiS0Byix3RlYlnE9TKnKsrAlhjqg0yiprWRjt/PAmK7hn2eqGo
+PfjHz6zHruZVFJU5dlyroJ2GwyOyhHrm/Ckjd29dhJ0rwcb6BAiFfNnML0/3/tD9
+jcpBAoGAdgN7MlrJ7ZQqkW7mJaFQyybfjkwseweU/fT6WQrRPtTu31haojnsIsCi
+3yJMXgCaCJZC1ICZIFwNzGwmHT7TRwc18JFbabwFhqtiw9OfWbZq1sY9ljXu/iZG
+LGeKisrZd3ZhhDF4BArMwvbJLPXZDyUsjjLtzBAxljruSn50bh0=
+-----END RSA PRIVATE KEY-----"""
+
+
+class TestJwtClientAssertion:
+	"""Verifies JWT client assertion generation and usage."""
+
+	def test_jwt_assertion_is_signed(self):
+		"""JWT is correctly built and RS256-signed when jwt_private_key is set."""
+		cfg = _make_config(
+			jwt_private_key=_TEST_PRIVATE_KEY,
+			jwt_issuer="erpnext.example.com",
+		)
+		svc = OAuth2Service(cfg)
+
+		# Access internal method directly for unit testing.
+		jwt_str = svc._build_client_assertion_jwt()
+
+		assert jwt_str is not None
+		assert isinstance(jwt_str, str)
+		# JWT has three dot-separated segments.
+		assert jwt_str.count(".") == 2
+
+		# Decode without verification to inspect claims.
+		import jwt as pyjwt
+
+		payload = pyjwt.decode(jwt_str, options={"verify_signature": False})
+		assert payload["iss"] == "erpnext.example.com"
+		assert payload["sub"] == "cid"
+		assert payload["aud"] == "https://revolut.com"
+		assert "exp" in payload
+		assert "iat" in payload
+		assert "jti" in payload
+		assert isinstance(payload["jti"], str)
+		assert len(payload["jti"]) > 0
+
+	def test_jwt_assertion_default_issuer(self):
+		"""iss defaults to client_id when jwt_issuer is not set."""
+		cfg = _make_config(jwt_private_key=_TEST_PRIVATE_KEY, jwt_issuer=None)
+		svc = OAuth2Service(cfg)
+
+		import jwt as pyjwt
+
+		jwt_str = svc._build_client_assertion_jwt()
+		payload = pyjwt.decode(jwt_str, options={"verify_signature": False})
+		assert payload["iss"] == "cid"  # Falls back to client_id
+
+	def test_each_call_generates_unique_jwt(self):
+		"""Each call to _build_client_assertion_jwt produces a different jti."""
+		cfg = _make_config(jwt_private_key=_TEST_PRIVATE_KEY)
+		svc = OAuth2Service(cfg)
+
+		import jwt as pyjwt
+
+		jwt1 = svc._build_client_assertion_jwt()
+		jwt2 = svc._build_client_assertion_jwt()
+
+		assert jwt1 != jwt2  # Different timestamps + jti
+
+		payload1 = pyjwt.decode(jwt1, options={"verify_signature": False})
+		payload2 = pyjwt.decode(jwt2, options={"verify_signature": False})
+		assert payload1["jti"] != payload2["jti"]
+
+	def test_token_request_includes_jwt_assertion(self):
+		"""Token request uses client_assertion instead of client_secret."""
+		cfg = _make_config(
+			jwt_private_key=_TEST_PRIVATE_KEY,
+			client_secret=None,  # Not needed with JWT
+		)
+		svc = OAuth2Service(cfg)
+
+		with patch("erpnext_bank_import.services.oauth.requests.post") as mock_post:
+			mock_response = MagicMock()
+			mock_response.status_code = 200
+			mock_response.json.return_value = {
+				"access_token": "jwt-access-token",
+				"refresh_token": "jwt-refresh-token",
+				"expires_in": 2400,
+				"token_type": "bearer",
+			}
+			mock_post.return_value = mock_response
+
+			# Call exchange code (which calls _token_request internally).
+			mocks = _patch_frappe_db(exists=False)
+			try:
+				token = svc.exchange_code_for_tokens(
+					code="test-auth-code",
+					bank_account="BA-001",
+				)
+				assert token.access_token == "jwt-access-token"
+			finally:
+				_unpatch_frappe_db(mocks)
+
+			# Verify the POST request included JWT assertion fields.
+			call_kwargs = mock_post.call_args[1]
+			data = call_kwargs.get("data", {})
+
+			assert "client_assertion" in data
+			assert "client_assertion_type" in data
+			assert data["client_assertion_type"] == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+			assert "client_secret" not in data  # Not sent when JWT is used
+
+	def test_missing_jwt_private_key_raises(self):
+		"""Building a JWT assertion without jwt_private_key raises."""
+		cfg = _make_config(jwt_private_key=None)
+		svc = OAuth2Service(cfg)
+
+		with pytest.raises(ConfigurationError, match="jwt_private_key"):
+			svc._build_client_assertion_jwt()
+
+	def test_provider_config_passes_through_jwt_fields(self):
+		"""OAuthProviderConfig.from_connector_config preserves JWT fields."""
+		cfg = _make_config(
+			jwt_private_key=_TEST_PRIVATE_KEY,
+			jwt_issuer="my.erp.com",
+		)
+		provider_cfg = OAuthProviderConfig.from_connector_config(cfg)
+
+		assert provider_cfg.jwt_private_key == _TEST_PRIVATE_KEY
+		assert provider_cfg.jwt_issuer == "my.erp.com"
+
+	def test_token_request_omits_client_secret_with_jwt(self):
+		"""client_secret is not sent when JWT assertion is configured."""
+		cfg = _make_config(
+			jwt_private_key=_TEST_PRIVATE_KEY,
+			client_secret="should-not-be-sent",
+		)
+		svc = OAuth2Service(cfg)
+
+		with patch("erpnext_bank_import.services.oauth.requests.post") as mock_post:
+			mock_response = MagicMock()
+			mock_response.status_code = 200
+			mock_response.json.return_value = {
+				"access_token": "test",
+				"refresh_token": "test",
+				"expires_in": 2400,
+			}
+			mock_post.return_value = mock_response
+
+			mocks = _patch_frappe_db(exists=False)
+			try:
+				svc.exchange_code_for_tokens(code="code", bank_account="BA-001")
+			finally:
+				_unpatch_frappe_db(mocks)
+
+			data = mock_post.call_args[1].get("data", {})
+			assert "client_secret" not in data
+			assert "client_assertion" in data

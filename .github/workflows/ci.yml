@@ -38,10 +38,11 @@ jobs:
       - name: Clone
         uses: actions/checkout@v6
 
-      - name: Find tests
+      - name: Check for test files
         run: |
-          echo "Finding tests"
-          grep -rn "def test" > /dev/null
+          TEST_COUNT=$(grep -rn "def test" --include="*.py" . | wc -l)
+          echo "Found $TEST_COUNT test functions"
+          echo "TEST_COUNT=$TEST_COUNT" >> $GITHUB_ENV
 
       - name: Setup Python
         uses: actions/setup-python@v6

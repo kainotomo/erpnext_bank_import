@@ -21,6 +21,19 @@ Tracked in GitHub Issues:
 
 Implementation order: A1 -> A2 -> A3 -> A4 -> A5 -> A6 -> A7 -> A8 -> A9 -> A10 -> A11
 
+### Compatibility
+
+| Requirement | Minimum Version |
+|---|---|
+| Frappe | >= 16.0.0 |
+| ERPNext | >= 16.0.0 |
+| Python | >= 3.12 |
+| Node.js | >= 22 |
+| MariaDB | >= 10.11 |
+| Redis | >= 7 |
+
+> **Note**: ERPNext must be installed on the bench before installing this app.
+
 ### Installation
 
 You can install this app using the [bench](https://github.com/frappe/bench) CLI:
@@ -28,7 +41,7 @@ You can install this app using the [bench](https://github.com/frappe/bench) CLI:
 ```bash
 cd $PATH_TO_YOUR_BENCH
 bench get-app $URL_OF_THIS_REPO --branch version-16
-bench install-app erpnext_bank_import
+bench --site your-site install-app erpnext_bank_import
 ```
 
 ### Contributing

@@ -8,7 +8,7 @@ app_license = "gpl-3.0"
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["erpnext"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -85,8 +85,8 @@ app_license = "gpl-3.0"
 # Installation
 # ------------
 
-# before_install = "erpnext_bank_import.install.before_install"
-# after_install = "erpnext_bank_import.install.after_install"
+before_install = "erpnext_bank_import.install.before_install"
+after_install = "erpnext_bank_import.install.after_install"
 
 # Uninstallation
 # ------------
@@ -255,4 +255,3 @@ app_license = "gpl-3.0"
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-

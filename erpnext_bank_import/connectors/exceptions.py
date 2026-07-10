@@ -75,11 +75,41 @@ class NormalizationError(ConnectorError):
 	"""
 
 
+class OAuthHandshakeError(ConnectorError):
+	"""Raised when the OAuth2 authorization code exchange fails.
+
+	Possible causes: invalid/expired authorization code, mismatched
+	redirect URI, or the bank API returning an error during token
+	exchange.
+	"""
+
+
+class TokenExpiredError(ConnectorError):
+	"""Raised when the access token is expired and cannot be refreshed.
+
+	This indicates that the refresh token itself has expired or no
+	refresh token is available.  The caller should re-initiate the
+	OAuth2 authorization code flow.
+	"""
+
+
+class TokenRevokedError(ConnectorError):
+	"""Raised when the refresh token has been revoked or is invalid.
+
+	A 400/401 response during a refresh token grant typically indicates
+	the refresh token was revoked.  The caller should clear stored
+	tokens and trigger re-authorization.
+	"""
+
+
 __all__ = [
 	"ApiError",
 	"AuthenticationError",
 	"ConfigurationError",
 	"ConnectorError",
 	"NormalizationError",
+	"OAuthHandshakeError",
 	"RateLimitError",
+	"TokenExpiredError",
+	"TokenRevokedError",
 ]

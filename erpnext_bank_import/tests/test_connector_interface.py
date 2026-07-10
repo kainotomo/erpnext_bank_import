@@ -485,3 +485,52 @@ class TestProviderRegistry:
 		assert isinstance(conn, TempProvider)
 		# Clean up
 		del PROVIDER_REGISTRY["temp"]
+
+
+# =========================================================================
+# ConnectorConfig OAuth fields
+# =========================================================================
+
+
+class TestConnectorConfigOAuth:
+	"""Verifies OAuth-specific fields on ConnectorConfig."""
+
+	def test_oauth_fields_have_sane_defaults(self):
+		"""New OAuth fields should have safe defaults when not set."""
+		cfg = ConnectorConfig(provider_name="test", api_base_url="https://api.example.com")
+		assert cfg.client_secret is None
+		assert cfg.authorize_url is None
+		assert cfg.revoke_url is None
+		assert cfg.scopes == []
+		assert cfg.redirect_uri is None
+		assert cfg.token_safety_buffer_seconds == 60
+
+	def test_oauth_fields_can_be_set(self):
+		"""All OAuth fields should be settable via constructor."""
+		cfg = ConnectorConfig(
+			provider_name="revolut",
+			api_base_url="https://api.revolut.com",
+			client_id="my-client-id",
+			client_secret="my-client-secret",
+			authorize_url="/auth/authorize",
+			token_url="/auth/token",
+			revoke_url="/auth/revoke",
+			scopes=["transactions:read"],
+			redirect_uri="https://erpnext.example.com/callback",
+			token_safety_buffer_seconds=120,
+		)
+		assert cfg.client_secret == "my-client-secret"
+		assert cfg.authorize_url == "/auth/authorize"
+		assert cfg.revoke_url == "/auth/revoke"
+		assert cfg.scopes == ["transactions:read"]
+		assert cfg.redirect_uri == "https://erpnext.example.com/callback"
+		assert cfg.token_safety_buffer_seconds == 120
+
+	def test_existing_fields_unchanged(self):
+		"""Pre-existing ConnectorConfig fields should still work."""
+		cfg = ConnectorConfig(
+			provider_name="mock", api_base_url="https://mock.example.com", auth_method="api_key"
+		)
+		assert cfg.provider_name == "mock"
+		assert cfg.api_base_url == "https://mock.example.com"
+		assert cfg.auth_method == "api_key"

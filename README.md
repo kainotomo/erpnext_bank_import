@@ -77,6 +77,42 @@ Automated tests are required for launch scope:
 
 Target workflow: foundation tests first, then provider-specific tests.
 
+#### Running tests via Frappe bench (requires a site)
+
+```bash
+# First, set the default site
+bench use tmp.localhost
+
+# Run all tests for this app
+bench run-tests --app erpnext_bank_import
+
+# Run tests for a specific module
+bench run-tests --app erpnext_bank_import --module test_transaction_schema
+bench run-tests --app erpnext_bank_import --module test_installation
+```
+
+> **Note**: Frappe's test runner only discovers `unittest.TestCase` subclasses.
+> The pytest-style tests must be run separately (see below).
+
+#### Running pytest-based tests (mock, no site needed)
+
+The `test_connector_interface.py` and `test_oauth_service.py` files use
+`pytest` with mocked Frappe dependencies.  Run them directly:
+
+```bash
+cd apps/erpnext_bank_import
+
+# All mock-based tests
+python -m pytest erpnext_bank_import/tests/ \
+  --ignore=erpnext_bank_import/tests/test_installation.py -v
+
+# OAuth service tests only
+python -m pytest erpnext_bank_import/tests/test_oauth_service.py -v
+
+# Connector interface tests only
+python -m pytest erpnext_bank_import/tests/test_connector_interface.py -v
+```
+
 
 ### License
 

@@ -685,6 +685,7 @@ class TestOAuth2ServiceTokenRefreshEdgeCases:
 		service = self._setup_service_with_stored_token()
 
 		import requests
+
 		mock_post.side_effect = requests.ConnectionError("Connection refused")
 
 		with pytest.raises(OAuthHandshakeError, match="Token request failed"):
@@ -711,9 +712,7 @@ class TestOAuth2ServiceAutoRefreshEdgeCases:
 
 	@patch("erpnext_bank_import.services.oauth.now_datetime")
 	@patch("erpnext_bank_import.services.oauth.requests.post")
-	def test_network_error_during_auto_refresh(
-		self, mock_post: MagicMock, mock_now: MagicMock
-	) -> None:
+	def test_network_error_during_auto_refresh(self, mock_post: MagicMock, mock_now: MagicMock) -> None:
 		"""When auto-refresh fails with network error, TokenExpiredError is raised."""
 		past_str = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 		mock_now.return_value = datetime.now()
@@ -734,6 +733,7 @@ class TestOAuth2ServiceAutoRefreshEdgeCases:
 		)
 		try:
 			import requests
+
 			mock_post.side_effect = requests.ConnectionError("Connection refused")
 
 			with pytest.raises(TokenExpiredError, match="Token refresh failed"):
@@ -742,9 +742,7 @@ class TestOAuth2ServiceAutoRefreshEdgeCases:
 			_unpatch_frappe_db(mocks)
 
 	@patch("erpnext_bank_import.services.oauth.now_datetime")
-	def test_token_expiring_soon_not_refreshed_if_still_valid(
-		self, mock_now: MagicMock
-	) -> None:
+	def test_token_expiring_soon_not_refreshed_if_still_valid(self, mock_now: MagicMock) -> None:
 		"""A token expiring in 30s is still valid (safety buffer not in _is_expired).
 
 		This documents a known gap: the safety buffer is NOT enforced by
@@ -786,11 +784,13 @@ class TestOAuth2Lifecycle:
 	@patch("erpnext_bank_import.services.oauth.requests.post")
 	def test_full_lifecycle(self, mock_post: MagicMock) -> None:
 		"""Complete OAuth flow: authorize URL → code exchange → access → refresh → revoke."""
-		svc = OAuth2Service(_make_config(
-			client_id="lifecycle-cid",
-			client_secret="lifecycle-secret",
-			revoke_url="/auth/revoke",
-		))
+		svc = OAuth2Service(
+			_make_config(
+				client_id="lifecycle-cid",
+				client_secret="lifecycle-secret",
+				revoke_url="/auth/revoke",
+			)
+		)
 
 		# 1. Authorization URL
 		auth_url = svc.get_authorize_url(state="state-123")
@@ -843,6 +843,7 @@ class TestOAuth2Lifecycle:
 				assert access == "lifecycle-access"
 			finally:
 				_unpatch_frappe_db(mocks2)
+
 		_check_valid()
 
 		# 4. Revoke tokens

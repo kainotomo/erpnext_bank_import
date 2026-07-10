@@ -432,7 +432,7 @@ class TestFixtureDeterminism:
 		txns2 = provider.fetch_all_transactions("mock-acc-001", "2026-01-01", "2026-06-30")
 
 		assert len(txns1) == len(txns2)
-		for t1, t2 in zip(txns1, txns2):
+		for t1, t2 in zip(txns1, txns2, strict=True):
 			assert t1["external_id"] == t2["external_id"]
 			assert t1["amount"] == t2["amount"]
 			assert t1["description"] == t2["description"]
@@ -446,7 +446,7 @@ class TestFixtureDeterminism:
 		accounts2 = provider.get_accounts()
 
 		assert len(accounts1) == len(accounts2)
-		for a1, a2 in zip(accounts1, accounts2):
+		for a1, a2 in zip(accounts1, accounts2, strict=True):
 			assert a1.account_id == a2.account_id
 			assert a1.account_name == a2.account_name
 			assert a1.currency == a2.currency
@@ -457,14 +457,10 @@ class TestFixtureDeterminism:
 		provider.authenticate()
 
 		for _ in range(3):
-			page1, _ = provider.fetch_transactions(
-				"mock-acc-001", "2026-01-01", "2026-06-30", page_token="1"
-			)
-			page2, _ = provider.fetch_transactions(
-				"mock-acc-001", "2026-01-01", "2026-06-30", page_token="1"
-			)
+			page1, _ = provider.fetch_transactions("mock-acc-001", "2026-01-01", "2026-06-30", page_token="1")
+			page2, _ = provider.fetch_transactions("mock-acc-001", "2026-01-01", "2026-06-30", page_token="1")
 			assert len(page1) == len(page2)
-			for t1, t2 in zip(page1, page2):
+			for t1, t2 in zip(page1, page2, strict=True):
 				assert t1["external_id"] == t2["external_id"]
 
 	def test_deterministic_account_count_from_config(self):
@@ -477,7 +473,7 @@ class TestFixtureDeterminism:
 		acc1 = provider1.get_accounts()
 		acc2 = provider2.get_accounts()
 		assert len(acc1) == len(acc2) == 2
-		for a1, a2 in zip(acc1, acc2):
+		for a1, a2 in zip(acc1, acc2, strict=True):
 			assert a1.account_id == a2.account_id
 
 
@@ -524,9 +520,7 @@ class TestFixtureFailurePaths:
 		provider = MockProvider()
 		provider.authenticate()
 		for _ in range(3):
-			txns, next_token = provider.fetch_transactions(
-				"mock-acc-001", "2026-01-01", "2026-06-30"
-			)
+			txns, _next_token = provider.fetch_transactions("mock-acc-001", "2026-01-01", "2026-06-30")
 			assert len(txns) == provider._transactions_per_page
 			# Optional fields should be str, float, or None
 			for opt_field in [

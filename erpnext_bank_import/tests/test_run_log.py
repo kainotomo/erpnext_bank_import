@@ -253,7 +253,7 @@ class TestRunLogIdempotency:
 		"""Zero account results → status is Success with zero counts."""
 		from erpnext_bank_import.services.run_log import RunLogger
 
-		with RunLogger("Test Connector", "mock") as run:
+		with RunLogger("Test Connector", "mock"):
 			pass
 
 		field_values = mock_frappe.db.set_value.call_args[0][2]

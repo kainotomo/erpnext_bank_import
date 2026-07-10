@@ -423,12 +423,16 @@ class OAuth2Service:
 			)
 		except requests.RequestException as exc:
 			frappe.logger().error(
-				"OAuth token request failed for provider %s (grant_type=%s): %s",
+				"OAuth token request failed for provider %s (grant_type=%s, url=%s): %s",
 				self._provider_name,
 				grant_type,
+				self._provider_config.token_url,
 				exc,
 			)
-			raise OAuthHandshakeError(f"Token request failed for '{self._provider_name}': {exc}") from exc
+			raise OAuthHandshakeError(
+				f"Token request failed for '{self._provider_name}' "
+				f"(grant_type={grant_type}, endpoint={self._provider_config.token_url}): {exc}"
+			) from exc
 
 		if response.status_code == 200:
 			return response.json()
@@ -436,26 +440,31 @@ class OAuth2Service:
 		# 400/401 during refresh typically means the refresh token is revoked.
 		if grant_type == "refresh_token" and response.status_code in (400, 401):
 			frappe.logger().error(
-				"OAuth refresh token revoked for provider %s (status=%s): %s",
+				"OAuth refresh token revoked for provider %s (status=%s, url=%s): %s",
 				self._provider_name,
 				response.status_code,
+				self._provider_config.token_url,
 				response.text,
 			)
 			raise TokenRevokedError(
-				f"Refresh token revoked for '{self._provider_name}': "
-				f"HTTP {response.status_code} — {response.text}"
+				f"Refresh token revoked for '{self._provider_name}' "
+				f"(endpoint={self._provider_config.token_url}, "
+				f"HTTP {response.status_code}): {response.text}"
 			)
 
 		# Any other error during exchange / refresh.
 		frappe.logger().error(
-			"OAuth token request failed for provider %s (grant_type=%s, status=%s): %s",
+			"OAuth token request failed for provider %s (grant_type=%s, status=%s, url=%s): %s",
 			self._provider_name,
 			grant_type,
 			response.status_code,
+			self._provider_config.token_url,
 			response.text,
 		)
 		raise OAuthHandshakeError(
-			f"Token request failed for '{self._provider_name}': HTTP {response.status_code} — {response.text}"
+			f"Token request failed for '{self._provider_name}' "
+			f"(grant_type={grant_type}, endpoint={self._provider_config.token_url}, "
+			f"HTTP {response.status_code}): {response.text}"
 		)
 
 	@staticmethod

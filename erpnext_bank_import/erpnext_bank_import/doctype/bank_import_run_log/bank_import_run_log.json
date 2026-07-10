@@ -1,0 +1,167 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-07-10 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "connector_name",
+  "provider_name",
+  "status",
+  "trigger",
+  "sb_timing",
+  "started_at",
+  "ended_at",
+  "duration_seconds",
+  "sb_counts",
+  "total_created",
+  "total_skipped",
+  "sb_window",
+  "date_from",
+  "date_to",
+  "sb_details",
+  "per_account_results",
+  "error_summary",
+  "error_traceback"
+ ],
+ "fields": [
+  {
+   "fieldname": "connector_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Connector Name",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "provider_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Provider Name",
+   "search_index": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Success\nPartial\nError",
+   "reqd": 1
+  },
+  {
+   "fieldname": "trigger",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Trigger",
+   "options": "Manual\nScheduled"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "sb_timing",
+   "fieldtype": "Section Break",
+   "label": "Timing"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "ended_at",
+   "fieldtype": "Datetime",
+   "label": "Ended At"
+  },
+  {
+   "fieldname": "duration_seconds",
+   "fieldtype": "Float",
+   "label": "Duration (seconds)",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "sb_counts",
+   "fieldtype": "Section Break",
+   "label": "Counts"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_created",
+   "fieldtype": "Int",
+   "label": "Transactions Created"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_skipped",
+   "fieldtype": "Int",
+   "label": "Transactions Skipped"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "sb_window",
+   "fieldtype": "Section Break",
+   "label": "Import Window"
+  },
+  {
+   "fieldname": "date_from",
+   "fieldtype": "Date",
+   "label": "Date From"
+  },
+  {
+   "fieldname": "date_to",
+   "fieldtype": "Date",
+   "label": "Date To"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "sb_details",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
+   "fieldname": "per_account_results",
+   "fieldtype": "JSON",
+   "label": "Per-Account Results"
+  },
+  {
+   "fieldname": "error_summary",
+   "fieldtype": "Small Text",
+   "label": "Error Summary"
+  },
+  {
+   "fieldname": "error_traceback",
+   "fieldtype": "Long Text",
+   "label": "Error Traceback"
+  }
+ ],
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-10 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Erpnext Bank Import",
+ "name": "Bank Import Run Log",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 0,
+   "write": 0
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

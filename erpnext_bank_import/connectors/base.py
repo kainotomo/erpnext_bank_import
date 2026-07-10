@@ -91,6 +91,26 @@ class BankConnector(ABC):
 		self._validate_config()
 
 	# ------------------------------------------------------------------
+	# Retry configuration
+	# ------------------------------------------------------------------
+
+	@property
+	def _retry_max_attempts(self) -> int:
+		"""Maximum retry attempts for transient API failures.
+
+		Read from ``ConnectorConfig.extra.get("retry_max_attempts", 3)``.
+		"""
+		return int(self.config.extra.get("retry_max_attempts", 3))
+
+	@property
+	def _retry_base_delay(self) -> float:
+		"""Base delay in seconds between retries.
+
+		Read from ``ConnectorConfig.extra.get("retry_base_delay", 1.0)``.
+		"""
+		return float(self.config.extra.get("retry_base_delay", 1.0))
+
+	# ------------------------------------------------------------------
 	# Auth lifecycle
 	# ------------------------------------------------------------------
 
@@ -219,13 +239,23 @@ class BankConnector(ABC):
 		all_txns: list[NormalizedTransaction] = []
 		page_token: str | None = None
 
+		# Lazy import to avoid circular dependency:
+		# connectors.base -> services.retry -> connectors.exceptions
+		from erpnext_bank_import.services.retry import retry
+
 		while True:
-			page, page_token = self.fetch_transactions(
-				account_id=account_id,
-				date_from=date_from,
-				date_to=date_to,
-				page_size=page_size,
-				page_token=page_token,
+			# Each page call is individually retried so a single transient
+			# failure does not abort the entire multi-page fetch.
+			page, page_token = retry(
+				lambda: self.fetch_transactions(
+					account_id=account_id,
+					date_from=date_from,
+					date_to=date_to,
+					page_size=page_size,
+					page_token=page_token,
+				),
+				max_retries=self._retry_max_attempts,
+				base_delay=self._retry_base_delay,
 			)
 			all_txns.extend(page)
 			if page_token is None:

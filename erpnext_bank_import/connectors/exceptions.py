@@ -32,7 +32,21 @@ class AuthenticationError(ConnectorError):
 	"""
 
 
-class RateLimitError(ConnectorError):
+# ------------------------------------------------------------------
+# Transient error support (defined before use by RateLimitError etc.)
+# ------------------------------------------------------------------
+
+
+class TransientError(ConnectorError):
+	"""Marker mixin/class for errors that are transient and may be retried.
+
+	Subclass this (or make an exception inherit from both ``ConnectorError``
+	and ``TransientError``) to indicate that the operation may succeed
+	if retried after a short delay.
+	"""
+
+
+class RateLimitError(TransientError):
 	"""Raised when the bank API rate limit is exceeded (HTTP 429).
 
 	The caller should back off and retry.  Implementations MAY attach
@@ -42,6 +56,50 @@ class RateLimitError(ConnectorError):
 	def __init__(self, message: str = "", retry_after: float | None = None) -> None:
 		self.retry_after = retry_after
 		super().__init__(message)
+
+
+class ServerError(TransientError):
+	"""Raised when the bank API returns a 5xx status code.
+
+	These errors indicate a temporary server-side issue and are safe
+	to retry with back-off.
+	"""
+
+	def __init__(
+		self, message: str = "", status_code: int | None = None, response_body: str | None = None
+	) -> None:
+		self.status_code = status_code
+		self.response_body = response_body
+		super().__init__(message)
+
+
+class NetworkError(TransientError):
+	"""Raised on network-level failures (timeout, DNS, connection refused).
+
+	These errors are inherently transient and safe to retry.
+	"""
+
+
+class MaxRetriesExceededError(ConnectorError):
+	"""Raised when the retry utility exhausts all attempts.
+
+	Attributes:
+	    original_exception: The last exception that triggered the retry
+	        chain, so callers can inspect the root cause.
+	    attempts: The number of attempts made before giving up.
+	"""
+
+	def __init__(
+		self, message: str = "", original_exception: Exception | None = None, attempts: int = 0
+	) -> None:
+		self.original_exception = original_exception
+		self.attempts = attempts
+		super().__init__(message)
+
+
+# ------------------------------------------------------------------
+# Non-transient errors
+# ------------------------------------------------------------------
 
 
 class ApiError(ConnectorError):
@@ -102,14 +160,41 @@ class TokenRevokedError(ConnectorError):
 	"""
 
 
+# ------------------------------------------------------------------
+# Helper: classify an exception as transient
+# ------------------------------------------------------------------
+
+
+def is_transient_error(exc: Exception) -> bool:
+	"""Return ``True`` if *exc* is a transient (retryable) error.
+
+	Checks the exception and its cause chain for ``TransientError``
+	subclasses or ``ApiError`` with status >= 500.
+	"""
+	if isinstance(exc, TransientError):
+		return True
+	if isinstance(exc, ApiError) and exc.status_code is not None and exc.status_code >= 500:
+		return True
+	# Also check the __cause__ chain
+	cause = getattr(exc, "__cause__", None)
+	if cause is not None:
+		return is_transient_error(cause)
+	return False
+
+
 __all__ = [
 	"ApiError",
 	"AuthenticationError",
 	"ConfigurationError",
 	"ConnectorError",
+	"MaxRetriesExceededError",
+	"NetworkError",
 	"NormalizationError",
 	"OAuthHandshakeError",
 	"RateLimitError",
+	"ServerError",
 	"TokenExpiredError",
 	"TokenRevokedError",
+	"TransientError",
+	"is_transient_error",
 ]

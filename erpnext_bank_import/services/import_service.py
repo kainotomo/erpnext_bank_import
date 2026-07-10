@@ -5,6 +5,9 @@ with duplicate-safe writes using ``transaction_id``-based dedup
 (following the same ``frappe.get_all`` pattern as ERPNext's
 ``BankStatementImportLog.check_for_conflicts``).
 
+Each run produces a structured ``Bank Import Run Log`` record with
+per-account results, timing, and diagnostic context.
+
 Usage
 -----
 .. code-block:: python
@@ -32,8 +35,20 @@ from erpnext_bank_import.connectors import (
 	get_connector,
 	get_connector_config,
 )
-from erpnext_bank_import.connectors.exceptions import AuthenticationError
+from erpnext_bank_import.connectors.exceptions import (
+	AuthenticationError,
+	ConnectorError,
+	MaxRetriesExceededError,
+)
 from erpnext_bank_import.schema.transaction import apply_mapping
+from erpnext_bank_import.services.diagnostics import (
+	PHASE_AUTH,
+	PHASE_FETCH,
+	PHASE_INSERT,
+	PHASE_UNKNOWN,
+	diagnose_error,
+)
+from erpnext_bank_import.services.run_log import RunLogger
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -45,6 +60,7 @@ def import_transactions(
 	date_from: str | None = None,
 	date_to: str | None = None,
 	account_ids: list[str] | None = None,
+	trigger: str = "Manual",
 ) -> dict:
 	"""Import transactions for a Bank Connector.
 
@@ -55,6 +71,7 @@ def import_transactions(
 	    date_to: End date (``YYYY-MM-DD``).  ``None`` means today.
 	    account_ids: Optional list of provider account IDs to restrict
 	        the import to specific mappings.
+	    trigger: ``"Manual"`` or ``"Scheduled"`` — recorded in the run log.
 
 	Returns:
 	    A summary dict with keys ``connector_name``, ``status``
@@ -62,39 +79,68 @@ def import_transactions(
 	    (list of per-account results), and optionally ``error``.
 	"""
 	# Load config & instantiate connector
-	config = get_connector_config(connector_name)
-	connector = get_connector(config.provider_name, config=config)
+	try:
+		config = get_connector_config(connector_name)
+		connector = get_connector(config.provider_name, config=config)
+	except Exception as e:
+		return _error_summary(connector_name, f"Configuration error: {e}")
 
-	# Ensure authentication
-	auth_ok = _ensure_auth(connector)
-	if not auth_ok:
-		return _error_summary(connector_name, "Authentication failed — unable to refresh token")
+	# Resolve date window for the run log
+	run_date_from = date_from
+	run_date_to = date_to
 
-	# Load the parent DocType to iterate account mappings
-	doc = frappe.get_doc("Bank Connector", connector_name)
+	# Create the run logger (context manager handles completion on exit)
+	with RunLogger(
+		connector_name=connector_name,
+		provider_name=config.provider_name,
+		trigger=trigger,
+		date_from=run_date_from,
+		date_to=run_date_to,
+	) as run:
+		# Ensure authentication
+		auth_ok = _ensure_auth(connector)
+		if not auth_ok:
+			diagnostic = diagnose_error(
+				AuthenticationError("Authentication failed — unable to refresh token"),
+				phase=PHASE_AUTH,
+			)
+			run.set_error(
+				summary=diagnostic["suggested_action"],
+				traceback_str=diagnostic["context"].get("message"),
+			)
+			return _error_summary(
+				connector_name,
+				f"{diagnostic['error_type']}: {diagnostic['suggested_action']}",
+			)
 
-	results: list[dict] = []
-	overall_status = "success"
+		# Load the parent DocType to iterate account mappings
+		doc = frappe.get_doc("Bank Connector", connector_name)
 
-	for mapping in doc.account_mappings:
-		if not mapping.is_enabled:
-			continue
-		if account_ids and mapping.provider_account_id not in account_ids:
-			continue
+		results: list[dict] = []
+		overall_status = "success"
 
-		result = _import_for_account(
-			connector=connector,
-			connector_name=connector_name,
-			mapping=mapping,
-			date_from=date_from,
-			date_to=date_to,
-		)
-		results.append(result)
-		if result.get("error"):
-			overall_status = "partial"
+		for mapping in doc.account_mappings:
+			if not mapping.is_enabled:
+				continue
+			if account_ids and mapping.provider_account_id not in account_ids:
+				continue
 
-	if not results:
-		return _error_summary(connector_name, "No enabled account mappings found")
+			result = _import_for_account(
+				connector=connector,
+				connector_name=connector_name,
+				mapping=mapping,
+				date_from=date_from,
+				date_to=date_to,
+			)
+			results.append(result)
+			run.add_account_result(**result)
+			if result.get("error"):
+				overall_status = "partial"
+
+		if not results:
+			msg = "No enabled account mappings found"
+			run.set_error(summary=msg)
+			return _error_summary(connector_name, msg)
 
 	return {
 		"connector_name": connector_name,
@@ -107,20 +153,34 @@ def import_all_enabled_connectors() -> list[dict]:
 	"""Import transactions for every enabled connector.
 
 	Entry point for the hourly scheduled job.  Calls
-	:func:`import_transactions` with no explicit dates so that every
-	connector runs in incremental mode.
+	:func:`import_transactions` with no explicit dates and
+	``trigger="Scheduled"`` so that every connector runs in
+	incremental mode.
 	"""
 	summaries: list[dict] = []
+	failures: list[tuple[str, str]] = []
+
 	for name in get_all_enabled_connectors():
 		try:
-			summary = import_transactions(name)
+			summary = import_transactions(name, trigger="Scheduled")
 			summaries.append(summary)
 		except Exception as e:
+			diagnostic = diagnose_error(e, phase=PHASE_UNKNOWN)
 			frappe.log_error(
-				message=f"Bank import failed for {name}: {e}",
-				title="Bank import failed",
+				message=f"{diagnostic['error_type']}: {e}\nAction: {diagnostic['suggested_action']}",
+				title=f"Bank import failed for {name}",
 			)
+			failures.append((name, diagnostic["suggested_action"]))
 			summaries.append(_error_summary(name, str(e)))
+
+	# If any connectors failed, write a single aggregated log entry
+	if failures:
+		agg_msg = "; ".join(f"{name}: {action}" for name, action in failures)
+		frappe.log_error(
+			message=agg_msg,
+			title=f"Bank import completed with {len(failures)} failure(s)",
+		)
+
 	return summaries
 
 
@@ -168,7 +228,8 @@ def _import_for_account(
 		if not connector.is_authenticated():
 			connector.refresh_token()
 	except AuthenticationError:
-		return _account_result(account_id, error="Authentication failed")
+		diagnostic = diagnose_error(AuthenticationError("Authentication failed"), phase=PHASE_AUTH)
+		return _account_result(account_id, error=diagnostic["suggested_action"])
 
 	# -- Fetch transactions from the bank API ------------------------------
 	try:
@@ -177,12 +238,20 @@ def _import_for_account(
 			date_from=date_from,
 			date_to=date_to,
 		)
-	except Exception as e:
+	except MaxRetriesExceededError as e:
+		diagnostic = diagnose_error(e, phase=PHASE_FETCH)
 		frappe.log_error(
-			message=str(e),
+			message=f"{diagnostic['error_type']}: {e}\nAction: {diagnostic['suggested_action']}",
 			title=f"Fetch failed for {connector_name} / {account_id}",
 		)
-		return _account_result(account_id, error=f"Fetch failed: {e}")
+		return _account_result(account_id, error=f"{diagnostic['error_type']}: {e}")
+	except Exception as e:
+		diagnostic = diagnose_error(e, phase=PHASE_FETCH)
+		frappe.log_error(
+			message=f"{diagnostic['error_type']}: {e}\nAction: {diagnostic['suggested_action']}",
+			title=f"Fetch failed for {connector_name} / {account_id}",
+		)
+		return _account_result(account_id, error=diagnostic["suggested_action"])
 
 	if not raw_txns:
 		return _account_result(account_id, created=0, skipped=0)
@@ -195,7 +264,15 @@ def _import_for_account(
 	company = frappe.get_cached_value("Bank Account", bank_account, "company")
 
 	for txn in raw_txns:
-		bt_dict = apply_mapping(txn)
+		try:
+			bt_dict = apply_mapping(txn)
+		except Exception as e:
+			diagnostic = diagnose_error(e, phase=PHASE_FETCH)
+			frappe.log_error(
+				message=f"Normalization failed for {connector_name} / {account_id}: {e}",
+				title="Transaction normalisation failed",
+			)
+			continue
 		bt_dict["bank_account"] = bank_account
 		bt_dict["company"] = company
 		# Follow ERPNext's insert_transactions pattern: start as Unreconciled
@@ -231,8 +308,9 @@ def _import_for_account(
 				max_txn_date = txn_date
 
 		except Exception as e:
+			diagnostic = diagnose_error(e, phase=PHASE_INSERT)
 			frappe.log_error(
-				message=str(e),
+				message=f"{diagnostic['error_type']}: {e}\nAction: {diagnostic['suggested_action']}",
 				title=f"Bank Transaction insert failed for {tid or '(no id)'}",
 			)
 			# continue with next transaction

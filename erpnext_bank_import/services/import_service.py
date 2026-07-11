@@ -541,14 +541,17 @@ def _import_for_account(
 
 
 def _publish_progress(current: int, total: int, message: str) -> None:
-	"""Publish import progress via Frappe realtime.
+	"""Publish import progress via Frappe realtime, scoped to the current user.
 
 	ERPNext-aligned pattern: the ``Importer`` publishes
 	``data_import_progress`` events; we publish ``bank_import_progress``.
+	The ``user`` parameter ensures the event is only sent to the user
+	who triggered the import, not to all site users.
 	"""
 	frappe.publish_realtime(
 		PROGRESS_EVENT,
 		{"current": current, "total": total, "message": message},
+		user=frappe.session.user,
 	)
 
 

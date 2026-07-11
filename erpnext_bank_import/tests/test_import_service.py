@@ -697,9 +697,10 @@ class TestValidateImportWindow:
 
 	def test_window_within_limit_passes(self):
 		"""Manual backfill within max_days should pass."""
-		from erpnext_bank_import.services.import_service import frappe as svc_frappe
-		from erpnext_bank_import.services.import_service import _validate_import_window
 		from datetime import date
+
+		from erpnext_bank_import.services.import_service import _validate_import_window
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
 
 		svc_frappe.utils.getdate.side_effect = date.fromisoformat
 		svc_frappe.utils.nowdate.return_value = "2026-07-10"
@@ -711,9 +712,10 @@ class TestValidateImportWindow:
 
 	def test_window_exceeds_limit_rejected(self):
 		"""Manual backfill exceeding max_days should return error message."""
-		from erpnext_bank_import.services.import_service import frappe as svc_frappe
-		from erpnext_bank_import.services.import_service import _validate_import_window
 		from datetime import date
+
+		from erpnext_bank_import.services.import_service import _validate_import_window
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
 
 		svc_frappe.utils.getdate.side_effect = date.fromisoformat
 		svc_frappe.utils.nowdate.return_value = "2026-07-10"
@@ -727,8 +729,8 @@ class TestValidateImportWindow:
 
 	def test_force_backfill_bypasses_limit(self):
 		"""Force Full Backfill should bypass the max window check."""
-		from erpnext_bank_import.services.import_service import frappe as svc_frappe
 		from erpnext_bank_import.services.import_service import _validate_import_window
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
 
 		mock_doc = type("MockDoc", (), {"force_full_backfill": True, "max_import_window_days": 30})()
 		svc_frappe.get_doc.return_value = mock_doc

@@ -217,13 +217,13 @@ def _resolve_action(exc: Exception, phase: str) -> str:
 
 
 __all__ = [
+	"DEADLINE_EXCEEDED_CODES",
+	"ERROR_CODES",
 	"PHASE_AUTH",
 	"PHASE_FETCH",
 	"PHASE_INSERT",
 	"PHASE_NORMALIZE",
 	"PHASE_UNKNOWN",
-	"ERROR_CODES",
-	"DEADLINE_EXCEEDED_CODES",
 	"diagnose_error",
 ]
 

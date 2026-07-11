@@ -29,6 +29,7 @@ Usage
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC
 
 import frappe
 from frappe.utils import create_batch, nowdate
@@ -156,7 +157,8 @@ def import_transactions(
 		results: list[dict] = []
 		overall_status = "success"
 		total_mappings = sum(
-			1 for m in doc.account_mappings
+			1
+			for m in doc.account_mappings
 			if m.is_enabled and (not account_ids or m.provider_account_id in account_ids)
 		)
 		mappings_done = 0
@@ -312,7 +314,7 @@ def get_import_health(connector_name: str, hours: int = 24) -> dict:
 	"""
 	from datetime import datetime, timedelta, timezone
 
-	since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+	since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
 
 	# Query Frappe's built-in Scheduled Job Log
 	scheduler_logs = frappe.get_all(
@@ -330,7 +332,15 @@ def get_import_health(connector_name: str, hours: int = 24) -> dict:
 	last_run = frappe.get_all(
 		"Bank Import Run Log",
 		filters={"connector_name": connector_name},
-		fields=["name", "status", "started_at", "ended_at", "total_created", "total_skipped", "error_summary"],
+		fields=[
+			"name",
+			"status",
+			"started_at",
+			"ended_at",
+			"total_created",
+			"total_skipped",
+			"error_summary",
+		],
 		order_by="started_at desc",
 		limit=1,
 	)
@@ -659,8 +669,8 @@ def _error_summary(connector_name: str, error: str) -> dict:
 
 
 __all__ = [
-	"import_all_enabled_connectors",
-	"import_transactions",
 	"enqueue_import",
 	"get_import_health",
+	"import_all_enabled_connectors",
+	"import_transactions",
 ]

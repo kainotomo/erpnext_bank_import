@@ -10,7 +10,7 @@ custom health-tracking infrastructure needed).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import frappe
 
@@ -27,7 +27,7 @@ def check() -> dict:
 	      connectors in the last 24h
 	    - ``last_scheduler_run``: status of the most recent hourly job
 	"""
-	since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+	since = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
 
 	connectors: list[dict] = []
 	global_error_count = 0

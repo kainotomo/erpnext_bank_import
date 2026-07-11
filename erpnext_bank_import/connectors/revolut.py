@@ -112,6 +112,11 @@ class RevolutConnector(BankConnector):
 		that ``_get_access_token()`` can resolve the correct token.
 		"""
 
+	# Transactions in these states are considered final and will be
+	# imported.  Pending, declined, and failed transactions are skipped
+	# because they may change or never settle.
+	_FINAL_STATES: frozenset[str] = frozenset({"completed", "reverted"})
+
 	# ------------------------------------------------------------------
 	# Public helpers
 	# ------------------------------------------------------------------
@@ -257,6 +262,21 @@ class RevolutConnector(BankConnector):
 		    AuthenticationError: If the API returns 401.
 		    RateLimitError: If the API returns 429.
 		    ApiError: For other non-2xx responses.
+
+		Note:
+		    **State filtering** — Only transactions in ``completed`` or
+		    ``reverted`` state are returned.  Pending, declined, and
+		    failed transactions are skipped because they may change or
+		    never settle.  The overlapping incremental import window
+		    ensures they are picked up if they reach a final state
+		    later.
+
+		    **Status-change limitation** — If a previously-imported
+		    ``completed`` transaction transitions to ``reverted``, its
+		    ``created_at`` falls outside future incremental windows and
+		    the change is **not** automatically detected.  This is an
+		    accepted limitation; operators should monitor via the Bank
+		    Reconciliation Tool.
 		"""
 		# Build query parameters.
 		params: dict[str, str | int] = {
@@ -277,6 +297,14 @@ class RevolutConnector(BankConnector):
 
 		txns: list[NormalizedTransaction] = []
 		for raw in data:
+			# Skip transactions in non-final states (pending, declined, failed).
+			# These will be refetched on subsequent import runs; if they
+			# reach a final state later, the overlapping incremental window
+			# ensures they are picked up.
+			txn_state = raw.get("state")
+			if txn_state not in self._FINAL_STATES:
+				continue
+
 			try:
 				txns.append(self.normalize_transaction(raw))
 			except NormalizationError:
@@ -336,8 +364,10 @@ class RevolutConnector(BankConnector):
 			raise NormalizationError("Missing required field: legs[0].currency")
 
 		# Parse the date from created_at (ISO-8601).
-		created_at = raw.get("created_at", "")
-		date = created_at[:10] if created_at else ""
+		created_at = raw.get("created_at")
+		if not created_at:
+			raise NormalizationError("Missing required field: created_at")
+		date = str(created_at)[:10]
 
 		# Build description — prefer legs description, fall back to reference.
 		description = primary_leg.get("description") or raw.get("reference") or ""
@@ -352,7 +382,7 @@ class RevolutConnector(BankConnector):
 			amount=float(amount),
 			currency=str(currency),
 			description=str(description),
-			reference_number=str(raw["reference"]) if raw.get("reference") else None,
+			reference_number=str(raw.get("reference")) if raw.get("reference") else None,
 			bank_party_name=str(merchant.get("name"))
 			if merchant.get("name")
 			else str(counterparty.get("name"))

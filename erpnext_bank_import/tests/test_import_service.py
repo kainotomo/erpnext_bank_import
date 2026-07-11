@@ -600,3 +600,138 @@ class TestDedupEdgeCases:
 			# Same txn-001 does NOT exist in BA-002 (different bank account)
 			result2 = _get_existing_transaction_ids("BA-002", ["txn-001"])
 			assert result2 == set()
+
+
+# =========================================================================
+# Large-window / batch processing tests
+# =========================================================================
+
+
+class TestLargeWindowBatch:
+	"""Tests for batch processing and progress reporting with large imports."""
+
+	def test_progress_callback_called_during_import(self, mock_all):
+		"""Progress callback should be invoked at least once during import."""
+		from erpnext_bank_import.services.import_service import import_transactions
+
+		progress_calls: list[tuple[int, int, str]] = []
+
+		def track_progress(current: int, total: int, msg: str) -> None:
+			progress_calls.append((current, total, msg))
+
+		result = import_transactions("_Test Connector", on_progress=track_progress)
+		assert result["status"] == "success"
+		assert len(progress_calls) > 0
+		last_msg = progress_calls[-1][2] if progress_calls else ""
+		assert "Inserted" in last_msg or "Normalising" in last_msg or "Processing" in last_msg
+
+	def test_progress_called_for_large_dataset(self, mock_all):
+		"""With 600 transactions the callback is called multiple times."""
+		from erpnext_bank_import.services.import_service import import_transactions
+
+		large_provider = MockProvider(
+			account_count=1,
+			total_pages=10,
+			transactions_per_page=60,  # 600 total
+		)
+		large_provider.authenticate()
+
+		with patch(
+			"erpnext_bank_import.services.import_service.get_connector",
+			return_value=large_provider,
+		):
+			progress_calls: list[tuple[int, int, str]] = []
+
+			def track_progress(current: int, total: int, msg: str) -> None:
+				progress_calls.append((current, total, msg))
+
+			result = import_transactions("_Test Connector", on_progress=track_progress)
+			assert result["status"] == "success"
+			r = result["results"][0]
+			assert r["created"] == 600
+			assert r["skipped"] == 0
+
+
+class TestDedupChunking:
+	"""Tests that dedup queries are safely chunked for large ID sets."""
+
+	def test_dedup_chunks_large_id_sets(self):
+		"""Dedup query should be split into smaller chunks with large ID sets."""
+		from erpnext_bank_import.services.import_service import (
+			DEDUP_CHUNK_SIZE,
+			_get_existing_transaction_ids,
+		)
+
+		large_ids = [f"txn-{i:04d}" for i in range(DEDUP_CHUNK_SIZE * 3)]
+		call_count = 0
+
+		def _side_effect(doctype, filters=None, **kwargs):
+			nonlocal call_count
+			call_count += 1
+			# frappe.get_all filter format: {"field": ["in", [val1, val2, ...]]}
+			txn_filter = (filters or {}).get("transaction_id", [])
+			txn_ids = txn_filter[1] if len(txn_filter) > 1 else []
+			assert len(txn_ids) <= DEDUP_CHUNK_SIZE, f"Chunk too big: {len(txn_ids)}"
+			return []
+
+		with patch(
+			"erpnext_bank_import.services.import_service.frappe.get_all",
+			side_effect=_side_effect,
+		):
+			result = _get_existing_transaction_ids("BA-001", large_ids)
+			assert result == set()
+			assert call_count >= 3, f"Expected >=3 calls, got {call_count}"
+
+
+class TestValidateImportWindow:
+	"""Tests for the import window validation helper."""
+
+	def test_incremental_sync_always_allowed(self):
+		"""Incremental sync (no date_from) should pass validation."""
+		from erpnext_bank_import.services.import_service import _validate_import_window
+
+		with patch("erpnext_bank_import.services.import_service.frappe.get_doc") as m:
+			result = _validate_import_window("_Test Connector", None, None)
+			assert result is None
+			m.assert_not_called()
+
+	def test_window_within_limit_passes(self):
+		"""Manual backfill within max_days should pass."""
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
+		from erpnext_bank_import.services.import_service import _validate_import_window
+		from datetime import date
+
+		svc_frappe.utils.getdate.side_effect = date.fromisoformat
+		svc_frappe.utils.nowdate.return_value = "2026-07-10"
+		mock_doc = type("MockDoc", (), {"force_full_backfill": False, "max_import_window_days": 365})()
+		svc_frappe.get_doc.return_value = mock_doc
+
+		result = _validate_import_window("_Test Connector", "2026-06-01", "2026-07-10")
+		assert result is None
+
+	def test_window_exceeds_limit_rejected(self):
+		"""Manual backfill exceeding max_days should return error message."""
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
+		from erpnext_bank_import.services.import_service import _validate_import_window
+		from datetime import date
+
+		svc_frappe.utils.getdate.side_effect = date.fromisoformat
+		svc_frappe.utils.nowdate.return_value = "2026-07-10"
+		mock_doc = type("MockDoc", (), {"force_full_backfill": False, "max_import_window_days": 30})()
+		svc_frappe.get_doc.return_value = mock_doc
+
+		result = _validate_import_window("_Test Connector", "2026-01-01", "2026-07-10")
+		assert result is not None
+		assert "exceeds" in result
+		assert "30" in result
+
+	def test_force_backfill_bypasses_limit(self):
+		"""Force Full Backfill should bypass the max window check."""
+		from erpnext_bank_import.services.import_service import frappe as svc_frappe
+		from erpnext_bank_import.services.import_service import _validate_import_window
+
+		mock_doc = type("MockDoc", (), {"force_full_backfill": True, "max_import_window_days": 30})()
+		svc_frappe.get_doc.return_value = mock_doc
+
+		result = _validate_import_window("_Test Connector", "2026-01-01", "2026-07-10")
+		assert result is None

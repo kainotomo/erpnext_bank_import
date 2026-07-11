@@ -77,6 +77,8 @@ class RunLogger(AbstractContextManager):
 		self._account_results: list[dict[str, Any]] = []
 		self._error_summary: str | None = None
 		self._error_traceback: str | None = None
+		self._progress_percent: float = 0.0
+		self._progress_message: str = ""
 		try:
 			self._started_at = now_datetime()
 		except Exception:
@@ -151,6 +153,8 @@ class RunLogger(AbstractContextManager):
 					"per_account_results": frappe.as_json(self._account_results),
 					"error_summary": error_summary or self._error_summary,
 					"error_traceback": error_traceback or self._error_traceback,
+					"progress_percent": self._progress_percent,
+					"progress_message": self._progress_message,
 				},
 			)
 		except Exception:
@@ -193,6 +197,29 @@ class RunLogger(AbstractContextManager):
 				**extra,
 			}
 		)
+
+	def set_progress(self, current: int, total: int, message: str) -> None:
+		"""Update progress on the run log record.
+
+		Args:
+		    current: Current progress count (e.g. transactions processed).
+		    total: Total expected count.
+		    message: Human-readable progress description.
+		"""
+		self._progress_percent = round((current / total) * 100, 1) if total > 0 else 0.0
+		self._progress_message = message
+		try:
+			frappe.db.set_value(
+				"Bank Import Run Log",
+				self.name,
+				{
+					"progress_percent": self._progress_percent,
+					"progress_message": self._progress_message,
+				},
+			)
+		except Exception:
+			# Progress updates must never crash the importer
+			pass
 
 	def set_error(self, summary: str, traceback_str: str | None = None) -> None:
 		"""Explicitly mark the run as errored with a summary.

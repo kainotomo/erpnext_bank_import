@@ -3,6 +3,10 @@
   {
    "action": "import_transactions_action",
    "label": "Import Transactions"
+  },
+  {
+   "action": "check_import_health_action",
+   "label": "Check Import Health"
   }
  ],
  "autoname": "field:connector_name",
@@ -34,7 +38,9 @@
   "account_mappings",
   "sb_import",
   "date_from",
-  "date_to"
+  "date_to",
+  "max_import_window_days",
+  "force_full_backfill"
  ],
  "fields": [
   {
@@ -193,6 +199,20 @@
    "fieldname": "date_to",
    "fieldtype": "Date",
    "label": "Import To Date"
+  },
+  {
+   "default": "365",
+   "description": "Maximum number of days allowed for a single manual backfill. Incremental syncs are not affected.",
+   "fieldname": "max_import_window_days",
+   "fieldtype": "Int",
+   "label": "Max Import Window (days)"
+  },
+  {
+   "default": "0",
+   "description": "Override the max window check for one-time full backfill. Turn off after use.",
+   "fieldname": "force_full_backfill",
+   "fieldtype": "Check",
+   "label": "Force Full Backfill"
   }
  ],
  "index_web_pages_for_search": 1,

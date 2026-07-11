@@ -154,43 +154,64 @@ class BankConnector(Document):
 	def import_transactions_action(self) -> None:
 		"""Trigger an import for this connector via the UI action button.
 
+		Enqueues a background job (following the same pattern as ERPNext's
+		``BankStatementImport.start_import()``) so the UI does not hang
+		for large imports.  Uses ``enqueue_import`` for dedup — if an
+		import for this connector is already queued, it is not duplicated.
+
 		Reads ``date_from`` / ``date_to`` from the form.  If both are
 		blank the import runs in incremental mode (uses
 		``last_synced_at`` per account mapping).  Otherwise it is a
 		backfill for the explicit date window.
 		"""
-		from erpnext_bank_import.services.import_service import import_transactions
+		from erpnext_bank_import.services.import_service import enqueue_import
 
 		date_from = self.date_from
 		date_to = self.date_to
 
-		summary = import_transactions(
+		enqueue_import(
 			connector_name=self.connector_name,
 			date_from=date_from,
 			date_to=date_to,
+			trigger="Manual",
 		)
 
-		parts: list[str] = []
-		for r in summary["results"]:
-			if r["error"]:
-				parts.append(
-					_("{account}: {created} created, {skipped} skipped — error: {err}").format(
-						account=r["account_id"], created=r["created"], skipped=r["skipped"], err=r["error"]
-					)
-				)
-			else:
-				parts.append(
-					_("{account}: {created} created, {skipped} skipped").format(
-						account=r["account_id"], created=r["created"], skipped=r["skipped"]
-					)
-				)
+	@frappe.whitelist()
+	def check_import_health_action(self) -> None:
+		"""Show a health summary for this connector.
 
-		msg = _("Import complete for {name}").format(name=self.connector_name)
-		if parts:
-			msg += "\n" + "\n".join(parts)
+		Queries Frappe's built-in ``Scheduled Job Log`` and our
+		``Bank Import Run Log`` to surface recent run status,
+		success/failure counts, and last error details — all in a
+		readable message dialog.
+		"""
+		from erpnext_bank_import.services.import_service import get_import_health
+
+		health = get_import_health(self.connector_name, hours=48)
+
+		lines: list[str] = []
+		last_run = health["last_import_run"]
+		if last_run:
+			lines.append(
+				f"Last import: {last_run.get('status', 'N/A')} "
+				f"({last_run.get('total_created', 0)} created, "
+				f"{last_run.get('total_skipped', 0)} skipped)"
+			)
+			if last_run.get("error_summary"):
+				lines.append(f"Last error: {last_run['error_summary']}")
+		else:
+			lines.append("No import runs recorded yet.")
+
+		error_count = health["recent_error_count"]
+		lines.append(f"Errors in last 48h: {error_count}")
+
+		scheduler_count = len(health["recent_scheduler_runs"])
+		lines.append(f"Scheduled job runs (last 48h): {scheduler_count}")
 
 		frappe.msgprint(
-			msg, title=_("Import Results"), indicator="green" if summary["status"] == "success" else "orange"
+			"\n".join(lines),
+			title=frappe._("Import Health: {0}").format(self.connector_name),
+			indicator="green" if error_count == 0 else "orange",
 		)
 
 	# ------------------------------------------------------------------

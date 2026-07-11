@@ -28,7 +28,10 @@ Usage
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import frappe
+from frappe.utils import create_batch, nowdate
 
 from erpnext_bank_import.connectors import (
 	get_all_enabled_connectors,
@@ -51,6 +54,25 @@ from erpnext_bank_import.services.diagnostics import (
 from erpnext_bank_import.services.run_log import RunLogger
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+BATCH_SIZE: int = 500
+"""Number of transactions processed per batch for progress reporting.
+
+Matches ERPNext's Importer batch-size pattern (``data_import_batch_size``
+defaults to 1000; we use a smaller chunk for finer progress granularity).
+"""
+
+DEDUP_CHUNK_SIZE: int = 500
+"""Max transaction IDs per SQL ``IN`` clause when checking for duplicates.
+
+MariaDB/MySQL have query-size limits; chunking prevents hitting them."""
+
+PROGRESS_EVENT: str = "bank_import_progress"
+"""Realtime event name published during import for UI progress."""
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -61,6 +83,7 @@ def import_transactions(
 	date_to: str | None = None,
 	account_ids: list[str] | None = None,
 	trigger: str = "Manual",
+	on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict:
 	"""Import transactions for a Bank Connector.
 
@@ -72,6 +95,8 @@ def import_transactions(
 	    account_ids: Optional list of provider account IDs to restrict
 	        the import to specific mappings.
 	    trigger: ``"Manual"`` or ``"Scheduled"`` — recorded in the run log.
+	    on_progress: Optional callback ``fn(current, total, message)``
+	        invoked after each batch for progress reporting.
 
 	Returns:
 	    A summary dict with keys ``connector_name``, ``status``
@@ -85,6 +110,12 @@ def import_transactions(
 	except Exception as e:
 		return _error_summary(connector_name, f"Configuration error: {e}")
 
+	# Validate import window for manual backfills
+	if trigger == "Manual":
+		window_error = _validate_import_window(connector_name, date_from, date_to)
+		if window_error:
+			return _error_summary(connector_name, window_error)
+
 	# Resolve date window for the run log
 	run_date_from = date_from
 	run_date_to = date_to
@@ -97,6 +128,12 @@ def import_transactions(
 		date_from=run_date_from,
 		date_to=run_date_to,
 	) as run:
+
+		def _progress(current: int, total: int, msg: str) -> None:
+			run.set_progress(current, total, msg)
+			if on_progress:
+				on_progress(current, total, msg)
+
 		# Ensure authentication
 		auth_ok = _ensure_auth(connector)
 		if not auth_ok:
@@ -118,6 +155,11 @@ def import_transactions(
 
 		results: list[dict] = []
 		overall_status = "success"
+		total_mappings = sum(
+			1 for m in doc.account_mappings
+			if m.is_enabled and (not account_ids or m.provider_account_id in account_ids)
+		)
+		mappings_done = 0
 
 		for mapping in doc.account_mappings:
 			if not mapping.is_enabled:
@@ -125,12 +167,20 @@ def import_transactions(
 			if account_ids and mapping.provider_account_id not in account_ids:
 				continue
 
+			mappings_done += 1
+			_progress(
+				mappings_done,
+				total_mappings,
+				f"Processing account {getattr(mapping, 'provider_account_name', None) or mapping.provider_account_id}...",
+			)
+
 			result = _import_for_account(
 				connector=connector,
 				connector_name=connector_name,
 				mapping=mapping,
 				date_from=date_from,
 				date_to=date_to,
+				on_progress=_progress,
 			)
 			results.append(result)
 			run.add_account_result(**result)
@@ -147,6 +197,63 @@ def import_transactions(
 		"status": overall_status,
 		"results": results,
 	}
+
+
+def enqueue_import(
+	connector_name: str,
+	date_from: str | None = None,
+	date_to: str | None = None,
+	trigger: str = "Manual",
+) -> str | None:
+	"""Enqueue an import as a background job (ERPNext-aligned pattern).
+
+	Follows the same approach as ERPNext's
+	``BankStatementImport.start_import()``: the job runs in the
+	``default`` queue with a generous timeout.
+
+	Args:
+	    connector_name: Name of the ``Bank Connector`` record.
+	    date_from: Optional start date (``YYYY-MM-DD``).
+	    date_to: Optional end date (``YYYY-MM-DD``).
+	    trigger: ``"Manual"`` or ``"Scheduled"``.
+
+	Returns:
+	    A ``job_id`` if the job was enqueued, or ``None`` if an
+	    identical job is already pending.
+	"""
+	from frappe.utils.background_jobs import is_job_enqueued
+	from frappe.utils.scheduler import is_scheduler_inactive
+
+	run_now = frappe.in_test or frappe.conf.developer_mode
+
+	if is_scheduler_inactive() and not run_now:
+		frappe.msgprint(
+			frappe._("Scheduler is inactive. Cannot import data in background."),
+			title=frappe._("Scheduler Inactive"),
+		)
+		return None
+
+	job_id = f"bank_import::{connector_name}"
+	if not is_job_enqueued(job_id):
+		frappe.enqueue(
+			"erpnext_bank_import.services.import_service.import_transactions",
+			queue="default",
+			timeout=6000,
+			job_id=job_id,
+			connector_name=connector_name,
+			date_from=date_from,
+			date_to=date_to,
+			trigger=trigger,
+			on_progress=_publish_progress,
+			now=run_now,
+		)
+		return job_id
+
+	frappe.msgprint(
+		frappe._("An import for '{0}' is already in progress.").format(connector_name),
+		title=frappe._("Import Queued"),
+	)
+	return None
 
 
 def import_all_enabled_connectors() -> list[dict]:
@@ -184,6 +291,67 @@ def import_all_enabled_connectors() -> list[dict]:
 	return summaries
 
 
+def get_import_health(connector_name: str, hours: int = 24) -> dict:
+	"""Return a health summary for a connector by cross-referencing
+	Frappe's ``Scheduled Job Log`` with our ``Bank Import Run Log``.
+
+	Uses Frappe's built-in scheduler log (no custom tracking needed)
+	to show recent run status, plus our per-connector run log for
+	per-account details.
+
+	Args:
+	    connector_name: The ``Bank Connector`` record name.
+	    hours: Look-back window in hours (default 24).
+
+	Returns:
+	    A dict with keys:
+	    - ``connector_name``
+	    - ``recent_scheduler_runs``: list of ``Scheduled Job Log`` entries
+	    - ``last_import_run``: the most recent ``Bank Import Run Log``
+	    - ``recent_error_count``: number of failed runs in the window
+	"""
+	from datetime import datetime, timedelta, timezone
+
+	since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+	# Query Frappe's built-in Scheduled Job Log
+	scheduler_logs = frappe.get_all(
+		"Scheduled Job Log",
+		filters={
+			"scheduled_job_type": ("like", "%import_all_enabled_connectors%"),
+			"creation": (">=", since),
+		},
+		fields=["status", "creation", "details"],
+		order_by="creation desc",
+		limit=20,
+	)
+
+	# Query our own run log for this connector
+	last_run = frappe.get_all(
+		"Bank Import Run Log",
+		filters={"connector_name": connector_name},
+		fields=["name", "status", "started_at", "ended_at", "total_created", "total_skipped", "error_summary"],
+		order_by="started_at desc",
+		limit=1,
+	)
+
+	error_count = frappe.db.count(
+		"Bank Import Run Log",
+		filters={
+			"connector_name": connector_name,
+			"status": ("in", ("Error", "Partial")),
+			"started_at": (">=", since),
+		},
+	)
+
+	return {
+		"connector_name": connector_name,
+		"recent_scheduler_runs": scheduler_logs,
+		"last_import_run": last_run[0] if last_run else None,
+		"recent_error_count": error_count,
+	}
+
+
 # ---------------------------------------------------------------------------
 # Per-account import
 # ---------------------------------------------------------------------------
@@ -195,6 +363,7 @@ def _import_for_account(
 	mapping,
 	date_from: str | None = None,
 	date_to: str | None = None,
+	on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict:
 	"""Fetch, deduplicate, and insert transactions for one account mapping.
 
@@ -204,6 +373,8 @@ def _import_for_account(
 	    mapping: A ``BankConnectorAccountMapping`` child-table row.
 	    date_from: Explicit start date, or ``None`` for incremental.
 	    date_to: Explicit end date, or ``None`` for today.
+	    on_progress: Optional callback ``fn(current, total, message)``
+	        invoked after each batch.
 
 	Returns:
 	    Dict with keys ``account_id``, ``created``, ``skipped``, ``error``.
@@ -267,7 +438,12 @@ def _import_for_account(
 	# Resolve company from the Bank Account
 	company = frappe.get_cached_value("Bank Account", bank_account, "company")
 
-	for txn in raw_txns:
+	total_fetched = len(raw_txns)
+
+	for idx, txn in enumerate(raw_txns):
+		if on_progress and idx % BATCH_SIZE == 0:
+			on_progress(idx, total_fetched, f"Normalising transactions... ({idx}/{total_fetched})")
+
 		try:
 			bt_dict = apply_mapping(txn)
 		except Exception as e:
@@ -287,43 +463,122 @@ def _import_for_account(
 		if tid:
 			transaction_ids.append(tid)
 
-	# -- Batch-check existing transactions ---------------------------------
+	# -- Batch-check existing transactions (chunked for SQL safety) ---------
 	existing_ids = _get_existing_transaction_ids(bank_account, transaction_ids)
 
-	# -- Insert new transactions -------------------------------------------
+	# -- Insert new transactions in batches --------------------------------
 	created = 0
 	skipped = 0
 	max_txn_date: str = date_from
 
+	# Determine which transactions need inserting
+	to_insert = []
 	for bt_dict in mapped_txns:
 		tid = bt_dict.get("transaction_id")
 		if tid and tid in existing_ids:
 			skipped += 1
-			continue
+		else:
+			to_insert.append(bt_dict)
 
-		try:
-			doc = frappe.get_doc({"doctype": "Bank Transaction", **bt_dict})
-			doc.insert()
-			doc.submit()
-			created += 1
+	total_to_insert = len(to_insert)
 
-			txn_date = bt_dict.get("date")
-			if txn_date and txn_date > max_txn_date:
-				max_txn_date = txn_date
+	for batch_idx, batch in enumerate(create_batch(to_insert, BATCH_SIZE)):
+		batch_created = 0
+		batch_errors = 0
 
-		except Exception as e:
-			diagnostic = diagnose_error(e, phase=PHASE_INSERT)
-			frappe.log_error(
-				message=f"{diagnostic['error_type']}: {e}\nAction: {diagnostic['suggested_action']}",
-				title=f"Bank Transaction insert failed for {tid or '(no id)'}",
+		for bt_dict in batch:
+			try:
+				doc = frappe.get_doc({"doctype": "Bank Transaction", **bt_dict})
+				doc.insert()
+				doc.submit()
+				created += 1
+				batch_created += 1
+
+				txn_date = bt_dict.get("date")
+				if txn_date and txn_date > max_txn_date:
+					max_txn_date = txn_date
+
+			except Exception as e:
+				batch_errors += 1
+				diagnostic = diagnose_error(e, phase=PHASE_INSERT)
+				frappe.log_error(
+					message=f"{diagnostic['error_type']}: {e}\nAction: {diagnostic['suggested_action']}",
+					title=f"Bank Transaction insert failed for {bt_dict.get('transaction_id', '(no id)')}",
+				)
+				# continue with next transaction
+
+		# Emit progress after each batch (ERPNext-aligned pattern)
+		if on_progress:
+			done = (batch_idx + 1) * BATCH_SIZE
+			if done > total_to_insert:
+				done = total_to_insert
+			on_progress(
+				done,
+				total_to_insert,
+				f"Inserted {created} transactions ({batch_created} in this batch, {batch_errors} errors)",
 			)
-			# continue with next transaction
 
 	# -- Update sync cursor (incremental mode only) ------------------------
 	if update_cursor and created > 0:
 		_update_last_synced(mapping, max_txn_date)
 
 	return _account_result(account_id, created=created, skipped=skipped)
+
+
+# ---------------------------------------------------------------------------
+# Progress publishing (used by enqueue_import)
+# ---------------------------------------------------------------------------
+
+
+def _publish_progress(current: int, total: int, message: str) -> None:
+	"""Publish import progress via Frappe realtime.
+
+	ERPNext-aligned pattern: the ``Importer`` publishes
+	``data_import_progress`` events; we publish ``bank_import_progress``.
+	"""
+	frappe.publish_realtime(
+		PROGRESS_EVENT,
+		{"current": current, "total": total, "message": message},
+	)
+
+
+# ---------------------------------------------------------------------------
+# Window validation
+# ---------------------------------------------------------------------------
+
+
+def _validate_import_window(connector_name: str, date_from: str | None, date_to: str | None) -> str | None:
+	"""Check that the requested import window is within the configured limit.
+
+	Returns an error message string if the window exceeds
+	``max_import_window_days``, or ``None`` if the window is valid.
+	Incremental syncs (no explicit ``date_from``) are always allowed.
+
+	The ``force_full_backfill`` flag on the connector bypasses this check.
+	"""
+	if date_from is None:
+		return None  # incremental sync, always allowed
+
+	doc = frappe.get_doc("Bank Connector", connector_name)
+
+	# Allow override via force_full_backfill checkbox (use attribute access)
+	if getattr(doc, "force_full_backfill", False):
+		return None
+
+	max_days = getattr(doc, "max_import_window_days", None) or 365
+	_from = frappe.utils.getdate(date_from)
+	_to = frappe.utils.getdate(date_to or nowdate())
+	window_days = (_to - _from).days
+
+	if window_days > max_days:
+		return (
+			f"The requested import window ({window_days} days) exceeds the "
+			f"maximum allowed ({max_days} days) for '{connector_name}'. "
+			f"Either reduce the date range or enable the "
+			f"'Force Full Backfill' option on the Bank Connector record."
+		)
+
+	return None
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +589,9 @@ def _import_for_account(
 def _get_existing_transaction_ids(bank_account: str, transaction_ids: list[str]) -> set[str]:
 	"""Batch-check which ``transaction_id``\\ s already exist for this bank account.
 
+	Chunks the ``IN`` clause into ``DEDUP_CHUNK_SIZE`` batches to avoid
+	hitting SQL query-size limits with very large import windows.
+
 	Follows ERPNext's ``check_for_conflicts()`` pattern
 	(:func:`frappe.get_all`) but uses exact ``transaction_id`` match
 	instead of a date-range overlap, giving precise dedup rather than
@@ -342,16 +600,20 @@ def _get_existing_transaction_ids(bank_account: str, transaction_ids: list[str])
 	if not transaction_ids:
 		return set()
 
-	existing = frappe.get_all(
-		"Bank Transaction",
-		filters={
-			"bank_account": bank_account,
-			"transaction_id": ["in", transaction_ids],
-			"docstatus": 1,
-		},
-		pluck="transaction_id",
-	)
-	return set(existing)
+	existing: set[str] = set()
+	for chunk in create_batch(transaction_ids, DEDUP_CHUNK_SIZE):
+		chunk_result = frappe.get_all(
+			"Bank Transaction",
+			filters={
+				"bank_account": bank_account,
+				"transaction_id": ["in", list(chunk)],
+				"docstatus": 1,
+			},
+			pluck="transaction_id",
+		)
+		existing.update(chunk_result)
+
+	return existing
 
 
 def _update_last_synced(mapping, max_date: str) -> None:
@@ -399,4 +661,6 @@ def _error_summary(connector_name: str, error: str) -> dict:
 __all__ = [
 	"import_all_enabled_connectors",
 	"import_transactions",
+	"enqueue_import",
+	"get_import_health",
 ]

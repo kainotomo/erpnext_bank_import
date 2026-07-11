@@ -35,6 +35,33 @@ PHASE_INSERT = "insert"
 PHASE_UNKNOWN = "unknown"
 
 # ------------------------------------------------------------------
+# Machine-readable error codes
+# ------------------------------------------------------------------
+
+_ERROR_CODES: dict[type, str] = {
+	AuthenticationError: "AUTH_FAILED",
+	TokenExpiredError: "TOKEN_EXPIRED",
+	TokenRevokedError: "TOKEN_REVOKED",
+	OAuthHandshakeError: "OAUTH_HANDSHAKE_FAILED",
+	ConfigurationError: "CONFIG_ERROR",
+	RateLimitError: "RATE_LIMITED",
+	ServerError: "SERVER_ERROR",
+	NetworkError: "NETWORK_ERROR",
+	NormalizationError: "NORMALIZATION_FAILED",
+	MaxRetriesExceededError: "MAX_RETRIES_EXCEEDED",
+}
+"""Maps exception types to machine-readable error codes.
+
+These codes are exposed in ``diagnose_error()`` output and can be
+used by operators to configure Frappe ``Notification`` rules for
+automated alerting.
+"""
+
+_DEADLINE_EXCEEDED_CODES = frozenset({"TOKEN_EXPIRED", "MAX_RETRIES_EXCEEDED"})
+"""Error codes that indicate an import run should not be retried
+automatically until the user takes corrective action."""
+
+# ------------------------------------------------------------------
 # Suggested-action catalog
 # ------------------------------------------------------------------
 
@@ -118,12 +145,14 @@ def diagnose_error(exc: Exception, phase: str = PHASE_UNKNOWN) -> dict[str, Any]
 	Returns:
 	    A dict with keys:
 	        - ``phase``: The pipeline phase label.
+	        - ``error_code``: Machine-readable error code.
 	        - ``error_type``: The exception class name.
 	        - ``is_transient``: Whether the error is retryable.
 	        - ``suggested_action``: A human-readable suggested next step.
 	        - ``context``: Additional structured context.
 	"""
 	error_type = type(exc).__name__
+	error_code = _resolve_error_code(exc)
 	is_transient = is_transient_error(exc)
 	suggested_action = _resolve_action(exc, phase)
 	context: dict[str, Any] = {"message": str(exc) if str(exc) else error_type}
@@ -144,11 +173,23 @@ def diagnose_error(exc: Exception, phase: str = PHASE_UNKNOWN) -> dict[str, Any]
 
 	return {
 		"phase": phase,
+		"error_code": error_code,
 		"error_type": error_type,
 		"is_transient": is_transient,
 		"suggested_action": suggested_action,
 		"context": context,
 	}
+
+
+def _resolve_error_code(exc: Exception) -> str:
+	"""Return the machine-readable error code for *exc*."""
+	exc_type = type(exc)
+	if exc_type in _ERROR_CODES:
+		return _ERROR_CODES[exc_type]
+	for cls in exc_type.__mro__:
+		if cls in _ERROR_CODES:
+			return _ERROR_CODES[cls]
+	return "UNKNOWN_ERROR"
 
 
 def _resolve_action(exc: Exception, phase: str) -> str:
@@ -181,5 +222,11 @@ __all__ = [
 	"PHASE_INSERT",
 	"PHASE_NORMALIZE",
 	"PHASE_UNKNOWN",
+	"ERROR_CODES",
+	"DEADLINE_EXCEEDED_CODES",
 	"diagnose_error",
 ]
+
+# Re-export error code constants for convenience
+ERROR_CODES = _ERROR_CODES
+DEADLINE_EXCEEDED_CODES = _DEADLINE_EXCEEDED_CODES

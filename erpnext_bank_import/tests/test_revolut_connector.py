@@ -5,9 +5,12 @@ These tests validate:
 1. Configuration validation — JWT fields required for Revolut
 2. Account discovery — ``GET /accounts`` parsing, inactive filter, bank-details enrichment
 3. Transaction fetch — paginated cursor-based fetch, normalisation, error mapping
-4. Normalisation — all transaction types (transfer, card_payment, atm, fee, exchange)
+4. Normalisation — all transaction types (transfer, card_payment, atm, fee, exchange,
+   refund, chargeback, tax, topup)
 5. Error handling — 401, 429, 5xx, network errors
 6. Rate limiting — respects ``rate_limit_rps``
+7. State filtering — pending/declined/failed skipped; completed/reverted included
+8. Edge cases — missing ``created_at``, missing ``reference`` key
 
 All Frappe-dependent code paths are mocked.  HTTP calls are mocked via
 ``unittest.mock.patch``.
@@ -40,9 +43,17 @@ from erpnext_bank_import.tests.fixtures.revolut_fixtures import (
 	MOCK_ERROR_500,
 	MOCK_TRANSACTIONS_ATM,
 	MOCK_TRANSACTIONS_CARD_PAYMENT,
+	MOCK_TRANSACTIONS_CHARGEBACK,
+	MOCK_TRANSACTIONS_DECLINED,
 	MOCK_TRANSACTIONS_EXCHANGE,
+	MOCK_TRANSACTIONS_FAILED,
 	MOCK_TRANSACTIONS_FEE,
 	MOCK_TRANSACTIONS_INCOMING,
+	MOCK_TRANSACTIONS_PENDING,
+	MOCK_TRANSACTIONS_REFUND,
+	MOCK_TRANSACTIONS_REVERTED,
+	MOCK_TRANSACTIONS_TAX,
+	MOCK_TRANSACTIONS_TOPUP,
 	MOCK_TRANSACTIONS_TRANSFER,
 	MOCK_TRANSACTIONS_WITHOUT_COUNTERPARTY,
 )
@@ -428,7 +439,8 @@ class TestRevolutNormalisation:
 		"""Transaction without legs[0].amount raises NormalizationError."""
 		connector = RevolutConnector(config=_make_revolut_config())
 		raw = dict(MOCK_TRANSACTIONS_TRANSFER)
-		raw["legs"][0] = dict(raw["legs"][0])
+		# Copy the legs list too so the fixture isn't mutated.
+		raw["legs"] = [dict(raw["legs"][0])]
 		raw["legs"][0].pop("amount")
 
 		with pytest.raises(NormalizationError, match="legs"):
@@ -438,7 +450,8 @@ class TestRevolutNormalisation:
 		"""Transaction without legs[0].currency raises NormalizationError."""
 		connector = RevolutConnector(config=_make_revolut_config())
 		raw = dict(MOCK_TRANSACTIONS_TRANSFER)
-		raw["legs"][0] = dict(raw["legs"][0])
+		# Copy the legs list too so the fixture isn't mutated.
+		raw["legs"] = [dict(raw["legs"][0])]
 		raw["legs"][0].pop("currency")
 
 		with pytest.raises(NormalizationError, match="legs"):
@@ -454,6 +467,77 @@ class TestRevolutNormalisation:
 		assert result["provider_metadata"]["legs"][0]["leg_id"] is not None
 		assert "card" in result["provider_metadata"]
 		assert result["provider_metadata"]["card"]["card_number"] is not None
+
+	def test_refund_normalisation(self):
+		"""Refund transaction normalises with positive amount."""
+		connector = RevolutConnector(config=_make_revolut_config())
+		result = connector.normalize_transaction(MOCK_TRANSACTIONS_REFUND)
+
+		assert result["external_id"] == "a1b2c3d4-5678-90ab-cdef-1234567890ab"
+		assert result["amount"] == 47.80  # positive for incoming refund
+		assert result["transaction_type"] == "refund"
+		assert result["currency"] == "GBP"
+		assert result["bank_party_name"] == "Supermarket Ltd"
+		assert result["reference_number"] == "RFND-2024-09-10"
+
+	def test_chargeback_normalisation(self):
+		"""Chargeback transaction normalises with merchant info."""
+		connector = RevolutConnector(config=_make_revolut_config())
+		result = connector.normalize_transaction(MOCK_TRANSACTIONS_CHARGEBACK)
+
+		assert result["amount"] == 120.00  # positive (reversal)
+		assert result["transaction_type"] == "chargeback"
+		assert result["bank_party_name"] == "Online Store Ltd"
+		assert result["included_fee"] == -15.00  # negative fee (chargeback fee)
+		assert "merchant" in result["provider_metadata"]
+
+	def test_tax_normalisation(self):
+		"""Tax transaction normalises correctly."""
+		connector = RevolutConnector(config=_make_revolut_config())
+		result = connector.normalize_transaction(MOCK_TRANSACTIONS_TAX)
+
+		assert result["amount"] == -450.00
+		assert result["transaction_type"] == "tax"
+		assert result["description"] == "HMRC tax payment"
+
+	def test_topup_normalisation(self):
+		"""Top-up transaction normalises with positive amount."""
+		connector = RevolutConnector(config=_make_revolut_config())
+		result = connector.normalize_transaction(MOCK_TRANSACTIONS_TOPUP)
+
+		assert result["amount"] == 500.00
+		assert result["transaction_type"] == "topup"
+		assert result["currency"] == "GBP"
+		assert result["description"] == "Account top-up via bank transfer"
+
+	def test_reverted_normalisation(self):
+		"""Reverted transaction normalises like a completed one."""
+		connector = RevolutConnector(config=_make_revolut_config())
+		result = connector.normalize_transaction(MOCK_TRANSACTIONS_REVERTED)
+
+		assert result["amount"] == -250.00
+		assert result["transaction_type"] == "transfer"
+		assert result["reference_number"] == "REVERTED-TXN"
+		assert result["provider_metadata"]["state"] == "reverted"
+
+	def test_missing_created_at_raises(self):
+		"""Transaction without 'created_at' raises NormalizationError."""
+		connector = RevolutConnector(config=_make_revolut_config())
+		raw = dict(MOCK_TRANSACTIONS_TRANSFER)
+		raw.pop("created_at")
+
+		with pytest.raises(NormalizationError, match="created_at"):
+			connector.normalize_transaction(raw)
+
+	def test_missing_reference_field(self):
+		"""Transaction without 'reference' key normalises without error."""
+		connector = RevolutConnector(config=_make_revolut_config())
+		raw = dict(MOCK_TRANSACTIONS_WITHOUT_COUNTERPARTY)
+		raw.pop("reference", None)
+
+		result = connector.normalize_transaction(raw)
+		assert result["reference_number"] is None
+		assert result["description"] == "Internal transfer"
 
 
 # =========================================================================
@@ -646,3 +730,66 @@ class TestRevolutBankAccountContext:
 
 		with pytest.raises(AuthenticationError, match="No bank account set"):
 			connector._api_get("/accounts")
+
+
+# =========================================================================
+# State filtering
+# =========================================================================
+
+
+class TestRevolutStateFiltering:
+	"""Verifies state-aware filtering in fetch_transactions."""
+
+	def _fetch_with_mock(self, cfg, mock_data):
+		"""Helper: call fetch_transactions with a mocked _api_get returning mock_data."""
+		connector = RevolutConnector(config=cfg)
+		connector.set_current_bank_account("BA-001")
+		with patch.object(connector, "_api_get", return_value=mock_data):
+			return connector.fetch_transactions(
+				account_id="b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+				date_from="2024-01-01",
+				date_to="2024-12-31",
+				page_size=100,
+			)
+
+	def test_pending_transaction_skipped(self):
+		"""Pending transaction is filtered out."""
+		txns, _ = self._fetch_with_mock(_make_revolut_config(), [MOCK_TRANSACTIONS_PENDING])
+		assert len(txns) == 0
+
+	def test_declined_transaction_skipped(self):
+		"""Declined transaction is filtered out."""
+		txns, _ = self._fetch_with_mock(_make_revolut_config(), [MOCK_TRANSACTIONS_DECLINED])
+		assert len(txns) == 0
+
+	def test_failed_transaction_skipped(self):
+		"""Failed transaction is filtered out."""
+		txns, _ = self._fetch_with_mock(_make_revolut_config(), [MOCK_TRANSACTIONS_FAILED])
+		assert len(txns) == 0
+
+	def test_completed_transaction_included(self):
+		"""Completed transaction is included."""
+		txns, _ = self._fetch_with_mock(_make_revolut_config(), [MOCK_TRANSACTIONS_TRANSFER])
+		assert len(txns) == 1
+		assert txns[0]["external_id"] == MOCK_TRANSACTIONS_TRANSFER["id"]
+
+	def test_reverted_transaction_included(self):
+		"""Reverted transaction is included (per policy)."""
+		txns, _ = self._fetch_with_mock(_make_revolut_config(), [MOCK_TRANSACTIONS_REVERTED])
+		assert len(txns) == 1
+		assert txns[0]["reference_number"] == "REVERTED-TXN"
+
+	def test_mixed_states_filtered_correctly(self):
+		"""Mixed page returns only completed/reverted transactions."""
+		mixed = [
+			MOCK_TRANSACTIONS_PENDING,
+			MOCK_TRANSACTIONS_TRANSFER,
+			MOCK_TRANSACTIONS_DECLINED,
+			MOCK_TRANSACTIONS_CARD_PAYMENT,
+			MOCK_TRANSACTIONS_FAILED,
+			MOCK_TRANSACTIONS_REVERTED,
+		]
+		txns, _ = self._fetch_with_mock(_make_revolut_config(), mixed)
+		assert len(txns) == 3  # transfer, card_payment, reverted
+		types = {t["transaction_type"] for t in txns}
+		assert types == {"transfer", "card_payment"}

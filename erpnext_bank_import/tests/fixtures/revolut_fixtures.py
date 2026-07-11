@@ -249,6 +249,195 @@ MOCK_TRANSACTIONS_WITHOUT_COUNTERPARTY: dict[str, Any] = {
 	],
 }
 
+MOCK_TRANSACTIONS_REFUND: dict[str, Any] = {
+	"id": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+	"type": "refund",
+	"state": "completed",
+	"created_at": "2024-09-10T14:30:00.000000Z",
+	"updated_at": "2024-09-10T14:30:00.000000Z",
+	"completed_at": "2024-09-10T14:30:00.000000Z",
+	"reference": "RFND-2024-09-10",
+	"legs": [
+		{
+			"leg_id": "a1b2c3d4-5678-90ab-cdef-1234567890ac",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"counterparty": {
+				"name": "Supermarket Ltd",
+				"account_id": "merchant-acc-001",
+			},
+			"amount": 47.80,
+			"currency": "GBP",
+			"description": "Refund — Supermarket Ltd",
+			"balance": 3680.00,
+		}
+	],
+}
+
+MOCK_TRANSACTIONS_CHARGEBACK: dict[str, Any] = {
+	"id": "b2c3d4e5-6789-0abc-def1-234567890abc",
+	"type": "chargeback",
+	"state": "completed",
+	"created_at": "2024-09-20T08:15:00.000000Z",
+	"updated_at": "2024-09-21T10:00:00.000000Z",
+	"completed_at": "2024-09-21T10:00:00.000000Z",
+	"merchant": {
+		"name": "Online Store Ltd",
+		"city": "London",
+		"category_code": "5399",
+		"country": "GBR",
+	},
+	"reference": "CHGBK-2024-09-20",
+	"legs": [
+		{
+			"leg_id": "b2c3d4e5-6789-0abc-def1-234567890abd",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"amount": 120.00,
+			"fee": -15.00,
+			"currency": "GBP",
+			"description": "Chargeback reversal — Online Store Ltd",
+			"balance": 3800.00,
+		}
+	],
+}
+
+MOCK_TRANSACTIONS_PENDING: dict[str, Any] = {
+	"id": "c3d4e5f6-7890-abcd-ef12-345678901abc",
+	"type": "card_payment",
+	"state": "pending",
+	"request_id": "REVP:pending-txn-001",
+	"created_at": "2024-10-01T09:00:00.000000Z",
+	"updated_at": "2024-10-01T09:00:00.000000Z",
+	"merchant": {
+		"name": "Coffee Shop",
+		"city": "London",
+		"category_code": "5812",
+		"country": "GBR",
+	},
+	"reference": "CARD-PENDING",
+	"legs": [
+		{
+			"leg_id": "c3d4e5f6-7890-abcd-ef12-345678901abd",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"amount": -5.50,
+			"currency": "GBP",
+			"description": "Coffee Shop",
+			"balance": 3794.50,
+		}
+	],
+}
+
+MOCK_TRANSACTIONS_DECLINED: dict[str, Any] = {
+	"id": "d4e5f6a7-8901-bcde-f123-456789012bcd",
+	"type": "card_payment",
+	"state": "declined",
+	"created_at": "2024-10-05T12:30:00.000000Z",
+	"updated_at": "2024-10-05T12:30:00.000000Z",
+	"merchant": {
+		"name": "Expensive Store",
+		"city": "Paris",
+		"category_code": "5651",
+		"country": "FRA",
+	},
+	"legs": [
+		{
+			"leg_id": "d4e5f6a7-8901-bcde-f123-456789012bce",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"amount": -1500.00,
+			"currency": "GBP",
+			"description": "Declined purchase — Expensive Store",
+			"balance": 3794.50,
+		}
+	],
+}
+
+MOCK_TRANSACTIONS_FAILED: dict[str, Any] = {
+	"id": "e5f6a7b8-9012-cdef-1234-567890123cde",
+	"type": "transfer",
+	"state": "failed",
+	"created_at": "2024-10-08T16:45:00.000000Z",
+	"updated_at": "2024-10-08T16:45:00.000000Z",
+	"reference": "FAILED-TRANSFER",
+	"legs": [
+		{
+			"leg_id": "e5f6a7b8-9012-cdef-1234-567890123cdf",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"counterparty": {
+				"name": "Unknown Beneficiary",
+				"account_id": "invalid-acc-999",
+			},
+			"amount": -500.00,
+			"currency": "GBP",
+			"description": "Failed transfer",
+			"balance": 3794.50,
+		}
+	],
+}
+
+MOCK_TRANSACTIONS_REVERTED: dict[str, Any] = {
+	"id": "f6a7b8c9-0123-defa-2345-678901234def",
+	"type": "transfer",
+	"state": "reverted",
+	"created_at": "2024-10-12T11:00:00.000000Z",
+	"updated_at": "2024-10-13T08:00:00.000000Z",
+	"completed_at": "2024-10-12T11:00:00.000000Z",
+	"reference": "REVERTED-TXN",
+	"legs": [
+		{
+			"leg_id": "f6a7b8c9-0123-defa-2345-678901234df0",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"counterparty": {
+				"name": "Some Vendor",
+				"account_id": "vendor-acc-005",
+			},
+			"amount": -250.00,
+			"currency": "GBP",
+			"description": "Reverted payment — Some Vendor",
+			"balance": 3544.50,
+		}
+	],
+}
+
+MOCK_TRANSACTIONS_TAX: dict[str, Any] = {
+	"id": "a7b8c9d0-1234-efab-3456-789012345ef0",
+	"type": "tax",
+	"state": "completed",
+	"created_at": "2024-10-15T00:00:00.000000Z",
+	"updated_at": "2024-10-15T00:00:00.000000Z",
+	"completed_at": "2024-10-15T00:00:00.000000Z",
+	"reference": "TAX-OCT-2024",
+	"legs": [
+		{
+			"leg_id": "a7b8c9d0-1234-efab-3456-789012345ef1",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"amount": -450.00,
+			"currency": "GBP",
+			"description": "HMRC tax payment",
+			"balance": 3094.50,
+		}
+	],
+}
+
+MOCK_TRANSACTIONS_TOPUP: dict[str, Any] = {
+	"id": "b8c9d0e1-2345-fabc-4567-890123456f01",
+	"type": "topup",
+	"state": "completed",
+	"created_at": "2024-10-20T18:00:00.000000Z",
+	"updated_at": "2024-10-20T18:00:00.000000Z",
+	"completed_at": "2024-10-20T18:00:00.000000Z",
+	"reference": "TOPUP-2024-10-20",
+	"legs": [
+		{
+			"leg_id": "b8c9d0e1-2345-fabc-4567-890123456f02",
+			"account_id": "b7ec67d3-5af1-42c8-bece-3d28nlmo894d",
+			"amount": 500.00,
+			"currency": "GBP",
+			"description": "Account top-up via bank transfer",
+			"balance": 3594.50,
+		}
+	],
+}
+
+
 # ---------------------------------------------------------------------------
 # Paginated response helpers
 # ---------------------------------------------------------------------------
@@ -303,9 +492,17 @@ __all__ = [
 	"MOCK_ERROR_500",
 	"MOCK_TRANSACTIONS_ATM",
 	"MOCK_TRANSACTIONS_CARD_PAYMENT",
+	"MOCK_TRANSACTIONS_CHARGEBACK",
+	"MOCK_TRANSACTIONS_DECLINED",
 	"MOCK_TRANSACTIONS_EXCHANGE",
+	"MOCK_TRANSACTIONS_FAILED",
 	"MOCK_TRANSACTIONS_FEE",
 	"MOCK_TRANSACTIONS_INCOMING",
+	"MOCK_TRANSACTIONS_PENDING",
+	"MOCK_TRANSACTIONS_REFUND",
+	"MOCK_TRANSACTIONS_REVERTED",
+	"MOCK_TRANSACTIONS_TAX",
+	"MOCK_TRANSACTIONS_TOPUP",
 	"MOCK_TRANSACTIONS_TRANSFER",
 	"MOCK_TRANSACTIONS_WITHOUT_COUNTERPARTY",
 	"make_transaction_page",

@@ -44,6 +44,8 @@ class BankConnector(Document):
 		company: DF.Link
 		connector_name: DF.Data
 		enabled: DF.Check
+		jwt_issuer: DF.Data | None
+		jwt_private_key: DF.Code | None
 		provider_name: DF.Literal["revolut", "mock"]
 		rate_limit_rps: DF.Float | None
 		redirect_uri: DF.Data | None
@@ -117,6 +119,8 @@ class BankConnector(Document):
 			rate_limit_rps=self.rate_limit_rps,
 			timeout_seconds=self.timeout_seconds or 30.0,
 			token_safety_buffer_seconds=self.token_safety_buffer_seconds or 60,
+			jwt_private_key=self.jwt_private_key,
+			jwt_issuer=self._none_if_blank(self.jwt_issuer),
 		)
 
 	@staticmethod
@@ -226,7 +230,8 @@ class BankConnector(Document):
 		missing = []
 		if not self.client_id:
 			missing.append("Client ID")
-		if not self.client_secret:
+		# client_secret is optional if JWT private key is provided (e.g. Revolut)
+		if not self.client_secret and not self.jwt_private_key:
 			missing.append("Client Secret")
 		if not self.authorize_url:
 			missing.append("Authorize URL")
@@ -242,13 +247,6 @@ class BankConnector(Document):
 	def _validate_account_mappings(self) -> None:
 		if not self.enabled:
 			return
-
-		# At least one enabled mapping when connector is enabled.
-		enabled_mappings = [m for m in self.account_mappings if m.is_enabled]
-		if not enabled_mappings:
-			frappe.throw(
-				frappe._("At least one enabled Account Mapping is required when the connector is enabled.")
-			)
 
 		# No duplicate provider_account_id within the same connector.
 		seen_ids: set[str] = set()

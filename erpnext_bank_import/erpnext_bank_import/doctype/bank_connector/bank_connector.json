@@ -22,6 +22,8 @@
   "sb_oauth",
   "client_id",
   "client_secret",
+  "jwt_private_key",
+  "jwt_issuer",
   "authorize_url",
   "token_url",
   "revoke_url",
@@ -113,7 +115,20 @@
    "fieldname": "client_secret",
    "fieldtype": "Password",
    "label": "Client Secret",
-   "mandatory_depends_on": "eval:doc.auth_method=='oauth2'"
+   "mandatory_depends_on": "eval:doc.auth_method=='oauth2' && !doc.jwt_private_key"
+  },
+  {
+   "fieldname": "jwt_private_key",
+   "fieldtype": "Code",
+   "label": "JWT Private Key",
+   "options": "PEM",
+   "description": "PEM-encoded RSA private key for JWT client assertion (RFC 7523). Required by providers like Revolut instead of client_secret."
+  },
+  {
+   "fieldname": "jwt_issuer",
+   "fieldtype": "Data",
+   "label": "JWT Issuer (iss)",
+   "description": "The 'iss' claim for JWT client assertion. For Revolut, use your ERPNext domain without https:// (e.g. erp.mycompany.com). Defaults to Client ID if blank."
   },
   {
    "fieldname": "authorize_url",

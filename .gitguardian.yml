@@ -1,0 +1,7 @@
+# GitGuardian configuration
+# Exclude test files containing dummy/throwaway RSA keys for unit tests.
+# These keys are generated solely for pytest and are NOT used in production.
+secret:
+  ignored-paths:
+    - erpnext_bank_import/tests/test_oauth_service.py
+    - erpnext_bank_import/tests/test_revolut_connector.py

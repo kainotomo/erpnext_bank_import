@@ -9,6 +9,7 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
+    "PyJWT>=2.9,<3",   # JWT signing for OAuth2 client assertions (Revolut)
 ]
 
 [build-system]

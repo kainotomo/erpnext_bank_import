@@ -19,7 +19,6 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Provider Account ID",
-   "reqd": 1,
    "search_index": 1
   },
   {
@@ -33,8 +32,7 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Bank Account",
-   "options": "Bank Account",
-   "reqd": 1
+   "options": "Bank Account"
   },
   {
    "fieldname": "company",

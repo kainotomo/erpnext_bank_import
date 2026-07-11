@@ -231,6 +231,10 @@ def _import_for_account(
 		diagnostic = diagnose_error(AuthenticationError("Authentication failed"), phase=PHASE_AUTH)
 		return _account_result(account_id, error=diagnostic["suggested_action"])
 
+	# -- Set current bank account for token resolution (Revolut etc.) ------
+	if hasattr(connector, "set_current_bank_account"):
+		connector.set_current_bank_account(bank_account)
+
 	# -- Fetch transactions from the bank API ------------------------------
 	try:
 		raw_txns = connector.fetch_all_transactions(

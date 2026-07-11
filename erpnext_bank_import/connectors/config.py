@@ -70,6 +70,23 @@ class ConnectorConfig:
 	token_safety_buffer_seconds: int = 60
 	"""Seconds before hard expiry to treat a token as expired (early refresh)."""
 
+	jwt_private_key: str | None = None
+	"""PEM-encoded RSA private key for JWT client assertion (RFC 7523).
+
+    Used by providers that require JWT bearer assertions instead of
+    ``client_secret`` (e.g. Revolut).  The corresponding X.509 public
+    certificate is uploaded to the provider's web app — it is **not**
+    stored here.
+    """
+
+	jwt_issuer: str | None = None
+	"""Value of the ``iss`` claim in the JWT client assertion.
+
+    For Revolut this is the ERPNext instance domain without the
+    ``https://`` prefix (e.g. ``"erp.mycompany.com"``).  If not set,
+    ``client_id`` is used as the issuer.
+    """
+
 	extra: dict[str, Any] = field(default_factory=dict)
 	"""Provider-specific configuration key-value pairs.
 

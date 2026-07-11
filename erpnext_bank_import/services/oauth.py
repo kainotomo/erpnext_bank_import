@@ -41,12 +41,14 @@ Usage
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timezone
 from typing import Any
 from urllib.parse import urlencode, urljoin
 
 import frappe
+import jwt
 import requests
 from frappe.utils import get_datetime, now_datetime
 
@@ -119,6 +121,20 @@ class OAuthProviderConfig:
 	token_safety_buffer_seconds: int = 60
 	"""Seconds before hard expiry to treat a token as expired."""
 
+	jwt_private_key: str | None = None
+	"""PEM-encoded RSA private key for JWT client assertion (RFC 7523).
+
+    When set, ``OAuth2Service._token_request()`` builds a signed JWT
+    assertion and sends it as ``client_assertion`` instead of using
+    ``client_secret``.
+    """
+
+	jwt_issuer: str | None = None
+	"""Value of the ``iss`` claim in the JWT client assertion.
+
+    Defaults to ``client_id`` if not set.
+    """
+
 	@classmethod
 	def from_connector_config(cls, config: ConnectorConfig) -> OAuthProviderConfig:
 		"""Build an ``OAuthProviderConfig`` from a ``ConnectorConfig``.
@@ -158,6 +174,8 @@ class OAuthProviderConfig:
 			scopes=config.scopes,
 			redirect_uri=config.redirect_uri,
 			token_safety_buffer_seconds=config.token_safety_buffer_seconds,
+			jwt_private_key=config.jwt_private_key,
+			jwt_issuer=config.jwt_issuer,
 		)
 
 
@@ -398,8 +416,50 @@ class OAuth2Service:
 			expires_at = expires_at.replace(tzinfo=None)
 		return expires_at <= now_datetime()
 
+	def _build_client_assertion_jwt(self) -> str:
+		"""Build and RS256-sign a JWT client assertion (RFC 7523).
+
+		Per Revolut's specification:
+		- Header: ``{"alg": "RS256", "typ": "JWT"}``
+		- Payload: ``{"iss": "<issuer>", "sub": "<client_id>",
+		  "aud": "https://revolut.com", "exp": <now+300>,
+		  "iat": <now>, "jti": "<uuid>"}``
+
+		A fresh JWT is generated on every call — the expiry is kept
+		short (5 minutes) per Revolut's best practice.
+
+		Returns:
+		    The signed JWT string.
+
+		Raises:
+		    ConfigurationError: If the private key is missing.
+		"""
+		cfg = self._provider_config
+		if not cfg.jwt_private_key:
+			raise ConfigurationError(
+				f"jwt_private_key is required for JWT client assertion (provider '{self._provider_name}')"
+			)
+
+		now = int(datetime.now().timestamp())
+		issuer = cfg.jwt_issuer or cfg.client_id
+
+		payload: dict[str, Any] = {
+			"iss": issuer,
+			"sub": cfg.client_id,
+			"aud": "https://revolut.com",
+			"exp": now + 300,  # 5-minute expiry
+			"iat": now,
+			"jti": str(uuid.uuid4()),
+		}
+
+		return jwt.encode(payload, key=cfg.jwt_private_key, algorithm="RS256")
+
 	def _token_request(self, data: dict[str, str | None]) -> dict[str, Any]:
 		"""Make a POST request to the token endpoint and handle responses.
+
+		If the provider config contains a ``jwt_private_key``, a JWT
+		client assertion (RFC 7523) is generated fresh for each call
+		and sent as ``client_assertion`` instead of ``client_secret``.
 
 		Args:
 		    data: The form-encoded body to send to the token endpoint.
@@ -413,6 +473,14 @@ class OAuth2Service:
 		    TokenRevokedError: If the endpoint returns a 400/401
 		        during a refresh token grant.
 		"""
+		# If JWT client assertion is configured, build a fresh JWT and
+		# replace client_secret with the assertion.
+		if self._provider_config.jwt_private_key:
+			data = dict(data)
+			data.pop("client_secret", None)
+			data["client_assertion_type"] = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+			data["client_assertion"] = self._build_client_assertion_jwt()
+
 		grant_type = data.get("grant_type", "")
 
 		try:

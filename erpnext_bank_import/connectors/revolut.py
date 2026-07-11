@@ -547,7 +547,7 @@ class RevolutConnector(BankConnector):
 # ---------------------------------------------------------------------------
 
 
-@frappe.whitelist(allow_guest=True)  # nosemgrep: guest access required for OAuth redirect callback
+@frappe.whitelist(allow_guest=True)
 def start_oauth_flow(connector_name: str) -> str:
 	"""Initiate the Revolut OAuth2 consent flow.
 
@@ -591,7 +591,7 @@ def start_oauth_flow(connector_name: str) -> str:
 	return consent_url
 
 
-@frappe.whitelist(allow_guest=True)  # nosemgrep: guest access required for OAuth redirect callback
+@frappe.whitelist(allow_guest=True)
 def oauth_callback(code: str | None = None, state: str | None = None) -> str:
 	"""Handle the OAuth2 redirect callback from Revolut.
 

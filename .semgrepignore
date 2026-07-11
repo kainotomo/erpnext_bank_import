@@ -1,0 +1,3 @@
+# OAuth endpoints that intentionally need guest access.
+# The OAuth redirect callback from Revolut happens without a Frappe session.
+*revolut.py

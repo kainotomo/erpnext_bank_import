@@ -16,6 +16,9 @@
   "sb_counts",
   "total_created",
   "total_skipped",
+  "sb_progress",
+  "progress_percent",
+  "progress_message",
   "sb_window",
   "date_from",
   "date_to",
@@ -99,6 +102,24 @@
    "fieldname": "total_skipped",
    "fieldtype": "Int",
    "label": "Transactions Skipped"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "sb_progress",
+   "fieldtype": "Section Break",
+   "label": "Progress"
+  },
+  {
+   "fieldname": "progress_percent",
+   "fieldtype": "Percent",
+   "label": "Progress",
+   "read_only": 1
+  },
+  {
+   "fieldname": "progress_message",
+   "fieldtype": "Small Text",
+   "label": "Progress Message",
+   "read_only": 1
   },
   {
    "collapsible": 1,

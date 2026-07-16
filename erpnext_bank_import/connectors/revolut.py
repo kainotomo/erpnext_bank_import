@@ -581,11 +581,19 @@ class RevolutConnector(BankConnector):
 def start_oauth_flow(connector_name: str) -> str:
 	"""Initiate the Revolut OAuth2 consent flow.
 
-	The ``connector_name`` is encoded in the OAuth ``state`` parameter
-	so the callback can look it up directly.
+	The ``connector_name`` is **not** passed via the consent URL because
+	Revolut's ``/app-confirm`` endpoint does not accept extra parameters
+	beyond the documented ones (``client_id``, ``redirect_uri``,
+	``response_type``, and optionally ``scope``).
+
+	The callback (``oauth_callback``) instead iterates over all enabled
+	Revolut connectors to find the correct one.  When only one Revolut
+	connector exists this works transparently; with multiple connectors
+	each one will attempt to exchange the code until one succeeds.
 
 	Args:
-	    connector_name: The ``Bank Connector`` record name.
+	    connector_name: The ``Bank Connector`` record name (used only
+	        for validation before building the URL).
 
 	Returns:
 	    The consent URL to which the user should be redirected.
@@ -602,69 +610,64 @@ def start_oauth_flow(connector_name: str) -> str:
 	is_sandbox = "sandbox" in (config.api_base_url or "").lower()
 	consent_base = _CONSENT_BASE_URLS[is_sandbox]
 
+	# Build params matching Revolut's documented format exactly.
+	# NOTE: Do NOT add 'state' — Revolut's /app-confirm rejects it.
 	params: dict[str, str] = {
 		"client_id": config.client_id or "",
 		"redirect_uri": config.redirect_uri or "",
 		"response_type": "code",
-		"state": connector_name,
 	}
 	if config.scopes:
 		params["scope"] = ",".join(config.scopes)
 
-	# Build the consent URL with standard URL-encoding.
 	query_string = urlencode(
 		{k: v for k, v in params.items() if v},
 	).replace("+", "%20")
 	consent_url = f"{consent_base}/app-confirm?{query_string}"
 
-	# Return the consent URL for the user to open.
 	return consent_url
 
 
 @frappe.whitelist(allow_guest=True)
-def oauth_callback(code: str | None = None, state: str | None = None) -> str:
+def oauth_callback(
+	code: str | None = None,
+	state: str | None = None,
+	connector: str | None = None,
+) -> dict:
 	"""Handle the OAuth2 redirect callback from Revolut.
 
 	Exchanges the authorization code for tokens and persists them.
+	Works by iterating all enabled Revolut connectors since the
+	consent URL cannot carry a ``state`` parameter.
 
 	Args:
 	    code: The authorization code from Revolut.
-	    state: The ``connector_name`` (passed as OAuth ``state`` param
-	        from :func:`start_oauth_flow`).
+	    state: Ignored (Revolut's /app-confirm does not return state).
+	    connector: Ignored (for future use if Revolut adds state support).
 
 	Returns:
-	    A status message.
+	    A dict with a ``message`` key.
 	"""
 	if not code:
 		frappe.throw(frappe._("Missing authorization code parameter."))
 
-	bank_account = state or "default"
-
-	if state:
-		# Direct lookup via state parameter.
-		doc = frappe.get_doc("Bank Connector", state)
-		config = doc.get_connector_config()
-		if config.provider_name != "revolut":
-			frappe.throw(frappe._("Connector '{0}' is not a Revolut connector.").format(state))
-		from erpnext_bank_import.services.oauth import OAuth2Service
-
-		oauth = OAuth2Service(config)
-		oauth.exchange_code_for_tokens(code=code, bank_account=bank_account)
-		return frappe._("OAuth2 authorization successful for connector '{0}'.").format(state)
-
-	# Fallback: iterate enabled connectors (legacy, no state).
 	from erpnext_bank_import.connectors import get_all_enabled_connectors
 
 	for name in get_all_enabled_connectors():
 		try:
-			config = frappe.get_doc("Bank Connector", name).get_connector_config()
+			doc = frappe.get_doc("Bank Connector", name)
+			config = doc.get_connector_config()
 			if config.provider_name != "revolut":
 				continue
+
 			from erpnext_bank_import.services.oauth import OAuth2Service
 
 			oauth = OAuth2Service(config)
-			oauth.exchange_code_for_tokens(code=code, bank_account=bank_account)
-			return frappe._("OAuth2 authorization successful for connector '{0}'.").format(name)
+			oauth.exchange_code_for_tokens(code=code, bank_account=name)
+			frappe.msgprint(
+				frappe._("OAuth2 authorization successful for connector '{0}'.").format(name)
+			)
+			return {"message": frappe._("Authorization successful. You can close this window.")}
 		except Exception:
 			continue
 

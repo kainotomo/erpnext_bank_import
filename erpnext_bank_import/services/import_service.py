@@ -630,8 +630,21 @@ def _get_existing_transaction_ids(bank_account: str, transaction_ids: list[str])
 
 
 def _update_last_synced(mapping, max_date: str) -> None:
-	"""Persist the latest transaction date as the per-account sync cursor."""
+	"""Persist the latest transaction date as the per-account sync cursor.
+
+	Also updates ``last_integration_date`` on the linked ``Bank Account``
+	doctype so ERPNext's native banking views reflect the latest sync.
+	"""
 	mapping.db_set("last_synced_at", max_date)
+
+	# Update ERPNext's native last_integration_date on the Bank Account
+	if mapping.bank_account:
+		frappe.db.set_value(
+			"Bank Account",
+			mapping.bank_account,
+			"last_integration_date",
+			max_date,
+		)
 
 
 def _ensure_auth(connector) -> bool:

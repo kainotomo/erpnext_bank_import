@@ -572,14 +572,36 @@ class OAuth2Service:
 		    bank_account: The bank account to associate with the token.
 		    token: The ``OAuthToken`` to persist.
 		"""
-		doc_name = self._doc_name(bank_account)
+		existing_name = frappe.db.exists(
+			"Bank Connector Token",
+			{"provider_name": self._provider_name, "bank_account": bank_account},
+		)
 
-		if frappe.db.exists("Bank Connector Token", doc_name):
-			doc = frappe.get_doc("Bank Connector Token", doc_name)
+		if existing_name:
+			doc = frappe.get_doc("Bank Connector Token", existing_name)
 		else:
 			doc = frappe.new_doc("Bank Connector Token")
 			doc.provider_name = self._provider_name
 			doc.bank_account = bank_account
+
+		doc.access_token = token.access_token
+		if token.refresh_token:
+			doc.refresh_token = token.refresh_token
+		doc.token_type = token.token_type
+		if token.expires_at:
+			doc.expires_at = token.expires_at.strftime("%Y-%m-%d %H:%M:%S")
+		doc.scope = token.scope or ""
+		doc.provider_metadata = token.provider_metadata
+
+		try:
+			doc.save(ignore_permissions=True)
+			frappe.db.commit()  # Ensure the save is committed immediately
+		except Exception as exc:
+			frappe.log_error(
+				message=f"Failed to save token for {bank_account}: {exc}",
+				title="Token persistence error",
+			)
+			raise
 
 		doc.access_token = token.access_token
 		if token.refresh_token:

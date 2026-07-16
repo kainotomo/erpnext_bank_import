@@ -68,7 +68,7 @@
  "modified_by": "Administrator",
  "module": "Erpnext Bank Import",
  "name": "Bank Connector Token",
- "naming_series": "BCT-.{provider_name}-.{bank_account}-.####",
+ "naming_series": "BCT-.{provider_name}-.#####",
  "owner": "Administrator",
  "permissions": [
   {

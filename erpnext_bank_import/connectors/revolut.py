@@ -50,6 +50,7 @@ from typing import Any
 
 import frappe
 import requests
+from frappe import _
 
 from erpnext_bank_import.connectors.base import BankConnector
 from erpnext_bank_import.connectors.config import AccountInfo, ConnectorConfig
@@ -664,16 +665,22 @@ def oauth_callback(
 
 			oauth = OAuth2Service(config)
 			oauth.exchange_code_for_tokens(code=code, bank_account=name)
-			frappe.msgprint(
-				frappe._("OAuth2 authorization successful for connector '{0}'.").format(name)
+			# Return a simple success message
+			return _(
+				"OAuth2 authorization successful for connector '{0}'. "
+				"You can close this window."
+			).format(name)
+		except Exception as exc:
+			frappe.log_error(
+				message=f"Token exchange failed for connector '{name}': {exc}",
+				title="Revolut OAuth callback error",
 			)
-			return {"message": frappe._("Authorization successful. You can close this window.")}
-		except Exception:
 			continue
 
 	frappe.throw(
-		frappe._(
+		_(
 			"Could not exchange authorization code. "
+			"Check the Error Log for details. "
 			"Ensure the certificate and redirect URI are correctly configured."
 		)
 	)

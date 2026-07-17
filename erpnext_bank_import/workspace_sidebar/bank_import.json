@@ -1,0 +1,52 @@
+{
+ "app": "erpnext_bank_import",
+ "creation": "2026-07-17 12:01:32.043871",
+ "docstatus": 0,
+ "doctype": "Workspace Sidebar",
+ "idx": 0,
+ "items": [
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "antenna",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Bank Connector",
+   "link_to": "Bank Connector",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "logs",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Bank Import Run Log",
+   "link_to": "Bank Import Run Log",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "circle-dot",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Bank Connector Token",
+   "link_to": "Bank Connector Token",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-07-17 12:05:07.646438",
+ "modified_by": "Administrator",
+ "module": "Erpnext Bank Import",
+ "name": "Bank Import",
+ "owner": "Administrator",
+ "standard": 1,
+ "title": "Bank Import"
+}

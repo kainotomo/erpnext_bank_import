@@ -3,16 +3,19 @@
   {
    "action": "erpnext_bank_import.erpnext_bank_import.doctype.bank_connector.bank_connector.import_transactions_action",
    "action_type": "Server Action",
+   "group": "Actions",
    "label": "Import Transactions"
   },
   {
    "action": "erpnext_bank_import.erpnext_bank_import.doctype.bank_connector.bank_connector.check_import_health_action",
    "action_type": "Server Action",
+   "group": "Actions",
    "label": "Check Import Health"
   },
   {
    "action": "erpnext_bank_import.erpnext_bank_import.doctype.bank_connector.bank_connector.fetch_accounts_action",
    "action_type": "Server Action",
+   "group": "Actions",
    "label": "Fetch Accounts"
   }
  ],
@@ -224,7 +227,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-07-17 11:15:40.698335",
+ "modified": "2026-07-17 11:38:07.396920",
  "modified_by": "Administrator",
  "module": "Erpnext Bank Import",
  "name": "Bank Connector",

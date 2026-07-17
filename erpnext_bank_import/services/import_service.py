@@ -249,6 +249,13 @@ def enqueue_import(
 			on_progress=_publish_progress,
 			now=run_now,
 		)
+		frappe.msgprint(
+			frappe._("Import for '{0}' has been queued. Check Bank Import Run Log for results.").format(
+				connector_name
+			),
+			title=frappe._("Import Queued"),
+			indicator="green",
+		)
 		return job_id
 
 	frappe.msgprint(
@@ -413,8 +420,10 @@ def _import_for_account(
 		return _account_result(account_id, error=diagnostic["suggested_action"])
 
 	# -- Set current bank account for token resolution (Revolut etc.) ------
+	# Use the connector name (not the Bank Account name) because the
+	# OAuth callback stores the token keyed by connector_name.
 	if hasattr(connector, "set_current_bank_account"):
-		connector.set_current_bank_account(bank_account)
+		connector.set_current_bank_account(connector_name)
 
 	# -- Fetch transactions from the bank API ------------------------------
 	try:

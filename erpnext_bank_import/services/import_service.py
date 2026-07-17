@@ -404,7 +404,8 @@ def _import_for_account(
 
 	if date_from is None:
 		if mapping.last_synced_at:
-			date_from = str(mapping.last_synced_at)
+			# last_synced_at is a datetime object; convert to YYYY-MM-DD
+			date_from = frappe.utils.getdate(mapping.last_synced_at).isoformat()
 		else:
 			date_from = frappe.utils.add_days(frappe.utils.nowdate(), -90)  # no cursor yet → default 90 days
 

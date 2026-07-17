@@ -622,12 +622,14 @@ class OAuth2Service:
 		Returns:
 		    A dict with token fields, or ``None`` if no record exists.
 		"""
-		doc_name = self._doc_name(bank_account)
-
-		if not frappe.db.exists("Bank Connector Token", doc_name):
+		existing_name = frappe.db.exists(
+			"Bank Connector Token",
+			{"provider_name": self._provider_name, "bank_account": bank_account},
+		)
+		if not existing_name:
 			return None
 
-		doc = frappe.get_doc("Bank Connector Token", doc_name)
+		doc = frappe.get_doc("Bank Connector Token", existing_name)
 		return {
 			"access_token": doc.get_password("access_token"),
 			"refresh_token": doc.get_password("refresh_token") if doc.refresh_token else None,
@@ -643,9 +645,12 @@ class OAuth2Service:
 		    bank_account: The bank account whose token record should
 		        be cleared.
 		"""
-		doc_name = self._doc_name(bank_account)
-		if frappe.db.exists("Bank Connector Token", doc_name):
-			frappe.get_doc("Bank Connector Token", doc_name).delete(ignore_permissions=True)
+		existing_name = frappe.db.exists(
+			"Bank Connector Token",
+			{"provider_name": self._provider_name, "bank_account": bank_account},
+		)
+		if existing_name:
+			frappe.get_doc("Bank Connector Token", existing_name).delete(ignore_permissions=True)
 
 	def _doc_name(self, bank_account: str) -> str:
 		"""Build the DocType name from provider name and bank account."""

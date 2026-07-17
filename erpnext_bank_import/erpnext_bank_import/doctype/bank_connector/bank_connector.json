@@ -1,12 +1,19 @@
 {
  "actions": [
   {
-   "action": "import_transactions_action",
+   "action": "erpnext_bank_import.erpnext_bank_import.doctype.bank_connector.bank_connector.import_transactions_action",
+   "action_type": "Server Action",
    "label": "Import Transactions"
   },
   {
-   "action": "check_import_health_action",
+   "action": "erpnext_bank_import.erpnext_bank_import.doctype.bank_connector.bank_connector.check_import_health_action",
+   "action_type": "Server Action",
    "label": "Check Import Health"
+  },
+  {
+   "action": "erpnext_bank_import.erpnext_bank_import.doctype.bank_connector.bank_connector.fetch_accounts_action",
+   "action_type": "Server Action",
+   "label": "Fetch Accounts"
   }
  ],
  "autoname": "field:connector_name",
@@ -124,17 +131,17 @@
    "mandatory_depends_on": "eval:doc.auth_method=='oauth2' && !doc.jwt_private_key"
   },
   {
+   "description": "PEM-encoded RSA private key for JWT client assertion (RFC 7523). Required by providers like Revolut instead of client_secret.",
    "fieldname": "jwt_private_key",
    "fieldtype": "Code",
    "label": "JWT Private Key",
-   "options": "PEM",
-   "description": "PEM-encoded RSA private key for JWT client assertion (RFC 7523). Required by providers like Revolut instead of client_secret."
+   "options": "PEM"
   },
   {
+   "description": "The 'iss' claim for JWT client assertion. For Revolut, use your ERPNext domain without https:// (e.g. erp.mycompany.com). Defaults to Client ID if blank.",
    "fieldname": "jwt_issuer",
    "fieldtype": "Data",
-   "label": "JWT Issuer (iss)",
-   "description": "The 'iss' claim for JWT client assertion. For Revolut, use your ERPNext domain without https:// (e.g. erp.mycompany.com). Defaults to Client ID if blank."
+   "label": "JWT Issuer (iss)"
   },
   {
    "fieldname": "authorize_url",
@@ -154,10 +161,10 @@
    "label": "Revoke URL"
   },
   {
+   "description": "Space-separated list of OAuth2 scopes",
    "fieldname": "scopes",
    "fieldtype": "Small Text",
-   "label": "Scopes",
-   "description": "Space-separated list of OAuth2 scopes"
+   "label": "Scopes"
   },
   {
    "fieldname": "redirect_uri",
@@ -217,7 +224,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-07-10 00:00:00",
+ "modified": "2026-07-17 11:15:40.698335",
  "modified_by": "Administrator",
  "module": "Erpnext Bank Import",
  "name": "Bank Connector",
@@ -236,6 +243,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],

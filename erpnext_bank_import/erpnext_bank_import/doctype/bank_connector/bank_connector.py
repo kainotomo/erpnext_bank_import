@@ -214,6 +214,23 @@ class BankConnector(Document):
 			indicator="green" if error_count == 0 else "orange",
 		)
 
+	@frappe.whitelist()
+	def fetch_accounts_action(self) -> None:
+		"""Discover bank accounts from the provider API and populate
+		the account mappings table.
+
+		For each account returned by the provider, this method creates
+		a row in the ``account_mappings`` child table with the
+		``provider_account_id`` and ``provider_account_name`` pre-filled.
+		The user then only needs to select the ERPNext ``Bank Account``
+		to link it.
+
+		When called as a Server Action (module-level function), delegates
+		to :func:`fetch_accounts_action_server` which resolves the
+		document from ``frappe.form_dict``.
+		"""
+		_fetch_accounts_for_doc(self)
+
 	# ------------------------------------------------------------------
 	# Internal validators
 	# ------------------------------------------------------------------
@@ -299,6 +316,114 @@ class BankConnector(Document):
 			)
 
 
+def _fetch_accounts_for_doc(doc: "BankConnector") -> None:
+	"""Shared implementation: discover accounts and populate mappings.
+
+	Args:
+	    doc: A ``Bank Connector`` document instance.
+	"""
+	from erpnext_bank_import.connectors import get_connector
+	from erpnext_bank_import.connectors.exceptions import AuthenticationError
+
+	config = doc.get_connector_config()
+	try:
+		connector = get_connector(doc.provider_name, config=config)
+	except Exception as e:
+		frappe.throw(frappe._("Failed to initialise connector: {0}").format(e))
+
+	try:
+		if hasattr(connector, "authenticate"):
+			connector.authenticate()
+		if hasattr(connector, "set_current_bank_account"):
+			connector.set_current_bank_account(doc.connector_name)
+		accounts = connector.get_accounts()
+	except AuthenticationError:
+		frappe.throw(
+			frappe._(
+				"Authentication failed. Please complete the OAuth2 flow "
+				"first using the consent URL from start_oauth_flow."
+			)
+		)
+	except Exception as e:
+		frappe.throw(frappe._("Failed to fetch accounts: {0}").format(e))
+
+	if not accounts:
+		frappe.msgprint(
+			frappe._("No active accounts found for this connector."),
+			title=frappe._("Account Discovery"),
+		)
+		return
+
+	existing_ids = {m.provider_account_id for m in doc.account_mappings if m.provider_account_id}
+
+	added = 0
+	for acc in accounts:
+		if acc.account_id in existing_ids:
+			continue
+		doc.append(
+			"account_mappings",
+			{
+				"provider_account_id": acc.account_id,
+				"provider_account_name": acc.account_name,
+				"currency": acc.currency,
+				"is_enabled": 1,
+			},
+		)
+		added += 1
+
+	if added:
+		doc.save(ignore_permissions=True)
+		frappe.msgprint(
+			frappe._("{0} account(s) added. Please select the Bank Account for each.").format(added),
+			title=frappe._("Account Discovery"),
+			indicator="green",
+		)
+	else:
+		frappe.msgprint(
+			frappe._("All discovered accounts are already mapped."),
+			title=frappe._("Account Discovery"),
+		)
+
+
+@frappe.whitelist()
+def import_transactions_action(doc: str | None = None, **kwargs) -> None:
+	"""Server Action entry point for the Import Transactions button."""
+	doc_data = _resolve_doc(doc)
+	doc_obj = frappe.get_doc("Bank Connector", doc_data.get("connector_name"))
+	doc_obj.import_transactions_action()
+
+
+@frappe.whitelist()
+def check_import_health_action(doc: str | None = None, **kwargs) -> None:
+	"""Server Action entry point for the Check Import Health button."""
+	doc_data = _resolve_doc(doc)
+	doc_obj = frappe.get_doc("Bank Connector", doc_data.get("connector_name"))
+	doc_obj.check_import_health_action()
+
+
+@frappe.whitelist()
+def fetch_accounts_action(doc: str | None = None, **kwargs) -> None:
+	"""Server Action entry point for the Fetch Accounts button."""
+	doc_data = _resolve_doc(doc)
+	doc_obj = frappe.get_doc("Bank Connector", doc_data.get("connector_name"))
+	_fetch_accounts_for_doc(doc_obj)
+
+
+def _resolve_doc(doc: str | None) -> dict:
+	"""Resolve the doc parameter — it may be a JSON string or None.
+
+	Frappe v16 Server Actions send the full document as a JSON-encoded
+	string under the ``doc`` key in the request.
+	"""
+	if doc and isinstance(doc, str):
+		import json
+		return json.loads(doc)
+	return frappe.form_dict or {}
+
+
 __all__ = [
 	"BankConnector",
+	"check_import_health_action",
+	"fetch_accounts_action",
+	"import_transactions_action",
 ]

@@ -1,0 +1,21 @@
+{
+ "app": "erpnext_bank_import",
+ "bg_color": "gray",
+ "creation": "2026-07-17 12:06:13.667585",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon_type": "App",
+ "idx": 0,
+ "label": "Bank Import",
+ "link_to": "Bank Import",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-07-17 12:06:13.667585",
+ "modified_by": "Administrator",
+ "name": "Bank Import",
+ "owner": "Administrator",
+ "restrict_removal": 0,
+ "roles": [],
+ "sidebar": "Bank Import",
+ "standard": 1
+}

@@ -72,12 +72,14 @@
    "fieldname": "started_at",
    "fieldtype": "Datetime",
    "label": "Started At",
+   "read_only": 1,
    "reqd": 1
   },
   {
    "fieldname": "ended_at",
    "fieldtype": "Datetime",
-   "label": "Ended At"
+   "label": "Ended At",
+   "read_only": 1
   },
   {
    "fieldname": "duration_seconds",
@@ -95,13 +97,15 @@
    "default": "0",
    "fieldname": "total_created",
    "fieldtype": "Int",
-   "label": "Transactions Created"
+   "label": "Transactions Created",
+   "read_only": 1
   },
   {
    "default": "0",
    "fieldname": "total_skipped",
    "fieldtype": "Int",
-   "label": "Transactions Skipped"
+   "label": "Transactions Skipped",
+   "read_only": 1
   },
   {
    "collapsible": 1,
@@ -130,12 +134,14 @@
   {
    "fieldname": "date_from",
    "fieldtype": "Date",
-   "label": "Date From"
+   "label": "Date From",
+   "read_only": 1
   },
   {
    "fieldname": "date_to",
    "fieldtype": "Date",
-   "label": "Date To"
+   "label": "Date To",
+   "read_only": 1
   },
   {
    "collapsible": 1,
@@ -146,17 +152,20 @@
   {
    "fieldname": "per_account_results",
    "fieldtype": "JSON",
-   "label": "Per-Account Results"
+   "label": "Per-Account Results",
+   "read_only": 1
   },
   {
    "fieldname": "error_summary",
    "fieldtype": "Small Text",
-   "label": "Error Summary"
+   "label": "Error Summary",
+   "read_only": 1
   },
   {
    "fieldname": "error_traceback",
    "fieldtype": "Long Text",
-   "label": "Error Traceback"
+   "label": "Error Traceback",
+   "read_only": 1
   }
  ],
  "istable": 0,

@@ -29,6 +29,7 @@
   "company",
   "enabled",
   "sb_api",
+  "sandbox",
   "api_base_url",
   "auth_method",
   "rate_limit_rps",
@@ -89,6 +90,13 @@
    "fieldname": "sb_api",
    "fieldtype": "Section Break",
    "label": "API Connection"
+  },
+  {
+   "default": "1",
+   "description": "Uncheck for production.",
+   "fieldname": "sandbox",
+   "fieldtype": "Check",
+   "label": "Sandbox Mode"
   },
   {
    "fieldname": "api_base_url",

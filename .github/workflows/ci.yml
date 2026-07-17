@@ -100,6 +100,6 @@ jobs:
         working-directory: /home/runner/frappe-bench
         run: |
           bench --site test_site set-config allow_tests true
-          bench --site test_site run-tests --app erpnext_bank_import
+          python -m pytest apps/erpnext_bank_import/erpnext_bank_import/tests/ -v
         env:
           TYPE: server

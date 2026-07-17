@@ -69,16 +69,9 @@ This app can use GitHub Actions for CI. The following workflows are configured:
 ### Testing
 
 ```bash
-# Frappe integration tests (requires a site)
-bench use tmp.localhost
-bench run-tests --app erpnext_bank_import
-
 # Mock-based pytest tests (fast, no site needed)
 cd apps/erpnext_bank_import
-python -m pytest erpnext_bank_import/tests/ -v \
-  --ignore=erpnext_bank_import/tests/test_installation.py \
-  --ignore=erpnext_bank_import/tests/test_bank_connector.py \
-  --ignore=erpnext_bank_import/tests/test_bank_import_run_log.py
+python -m pytest erpnext_bank_import/tests/ -v
 ```
 
 

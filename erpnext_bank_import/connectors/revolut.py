@@ -686,8 +686,70 @@ def oauth_callback(
 	)
 
 
+@frappe.whitelist()
+def generate_certificate() -> dict:
+	"""Generate an RSA keypair and self-signed X.509 certificate.
+
+	Returns a dict with:
+	- ``private_key``: PEM-encoded RSA private key (PKCS#8 format).
+	- ``public_certificate``: PEM-encoded self-signed X.509 certificate
+	  to be uploaded to the Revolut Business Portal.
+
+	The private key is suitable for JWT client assertion (RFC 7523)
+	  signing with RS256.
+	"""
+	from cryptography import x509
+	from cryptography.hazmat.primitives import hashes, serialization
+	from cryptography.hazmat.primitives.asymmetric import rsa
+	from cryptography.x509.oid import NameOID
+	import datetime
+
+	# Generate 2048-bit RSA private key
+	private_key = rsa.generate_private_key(
+		public_exponent=65537,
+		key_size=2048,
+	)
+
+	# Build a self-signed certificate (valid 10 years)
+	subject = issuer = x509.Name([
+		x509.NameAttribute(NameOID.COUNTRY_NAME, "CY"),
+		x509.NameAttribute(NameOID.ORGANIZATION_NAME, "ERPNext Bank Import"),
+		x509.NameAttribute(NameOID.COMMON_NAME, "erpnext-bank-import"),
+	])
+	cert = (
+		x509.CertificateBuilder()
+		.subject_name(subject)
+		.issuer_name(issuer)
+		.public_key(private_key.public_key())
+		.serial_number(x509.random_serial_number())
+		.not_valid_before(datetime.datetime.now(datetime.UTC))
+		.not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=3650))
+		.add_extension(
+			x509.BasicConstraints(ca=False, path_length=None),
+			critical=True,
+		)
+		.sign(private_key, hashes.SHA256())
+	)
+
+	private_key_pem = private_key.private_bytes(
+		encoding=serialization.Encoding.PEM,
+		format=serialization.PrivateFormat.PKCS8,
+		encryption_algorithm=serialization.NoEncryption(),
+	).decode("utf-8")
+
+	cert_pem = cert.public_bytes(
+		encoding=serialization.Encoding.PEM,
+	).decode("utf-8")
+
+	return {
+		"private_key": private_key_pem,
+		"public_certificate": cert_pem,
+	}
+
+
 __all__ = [
 	"RevolutConnector",
+	"generate_certificate",
 	"oauth_callback",
 	"start_oauth_flow",
 ]

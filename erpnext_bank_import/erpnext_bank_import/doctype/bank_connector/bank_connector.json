@@ -62,6 +62,7 @@
    "unique": 1
   },
   {
+   "default": "revolut",
    "fieldname": "provider_name",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -133,13 +134,13 @@
    "fieldname": "client_id",
    "fieldtype": "Data",
    "label": "Client ID",
-   "mandatory_depends_on": "eval:doc.auth_method=='oauth2'"
+   "mandatory_depends_on": "eval:doc.auth_method=='oauth2' && doc.provider_name!='revolut'"
   },
   {
    "fieldname": "client_secret",
    "fieldtype": "Password",
    "label": "Client Secret",
-   "mandatory_depends_on": "eval:doc.auth_method=='oauth2' && !doc.jwt_private_key"
+   "mandatory_depends_on": "eval:doc.auth_method=='oauth2' && doc.provider_name!='revolut' && !doc.jwt_private_key"
   },
   {
    "description": "PEM-encoded RSA private key for JWT client assertion (RFC 7523). Required by providers like Revolut instead of client_secret.",

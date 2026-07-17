@@ -267,11 +267,15 @@ class BankConnector(Document):
 		if self.auth_method != "oauth2":
 			return
 		missing = []
-		if not self.client_id:
+		# Revolut uses JWT client assertion — client_secret is never needed
+		if self.provider_name != "revolut":
+			if not self.client_secret and not self.jwt_private_key:
+				missing.append("Client Secret")
+		# client_id is required for OAuth2, but allow saving without it
+		# when setting up a Revolut connector (user will fill it after
+		# generating a certificate and getting it from Revolut).
+		if not self.client_id and self.provider_name != "revolut":
 			missing.append("Client ID")
-		# client_secret is optional if JWT private key is provided (e.g. Revolut)
-		if not self.client_secret and not self.jwt_private_key:
-			missing.append("Client Secret")
 		if not self.authorize_url:
 			missing.append("Authorize URL")
 		if not self.token_url:

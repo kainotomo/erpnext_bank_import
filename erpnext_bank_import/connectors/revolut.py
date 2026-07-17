@@ -667,8 +667,7 @@ def oauth_callback(
 			oauth.exchange_code_for_tokens(code=code, bank_account=name)
 			# Return a simple success message
 			return _(
-				"OAuth2 authorization successful for connector '{0}'. "
-				"You can close this window."
+				"OAuth2 authorization successful for connector '{0}'. You can close this window."
 			).format(name)
 		except Exception as exc:
 			frappe.log_error(
@@ -698,11 +697,12 @@ def generate_certificate() -> dict:
 	The private key is suitable for JWT client assertion (RFC 7523)
 	  signing with RS256.
 	"""
+	import datetime
+
 	from cryptography import x509
 	from cryptography.hazmat.primitives import hashes, serialization
 	from cryptography.hazmat.primitives.asymmetric import rsa
 	from cryptography.x509.oid import NameOID
-	import datetime
 
 	# Generate 2048-bit RSA private key
 	private_key = rsa.generate_private_key(
@@ -711,11 +711,13 @@ def generate_certificate() -> dict:
 	)
 
 	# Build a self-signed certificate (valid 10 years)
-	subject = issuer = x509.Name([
-		x509.NameAttribute(NameOID.COUNTRY_NAME, "CY"),
-		x509.NameAttribute(NameOID.ORGANIZATION_NAME, "ERPNext Bank Import"),
-		x509.NameAttribute(NameOID.COMMON_NAME, "erpnext-bank-import"),
-	])
+	subject = issuer = x509.Name(
+		[
+			x509.NameAttribute(NameOID.COUNTRY_NAME, "CY"),
+			x509.NameAttribute(NameOID.ORGANIZATION_NAME, "ERPNext Bank Import"),
+			x509.NameAttribute(NameOID.COMMON_NAME, "erpnext-bank-import"),
+		]
+	)
 	cert = (
 		x509.CertificateBuilder()
 		.subject_name(subject)

@@ -422,6 +422,7 @@ def _resolve_doc(doc: str | None) -> dict:
 	"""
 	if doc and isinstance(doc, str):
 		import json
+
 		return json.loads(doc)
 	return frappe.form_dict or {}
 

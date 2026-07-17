@@ -60,22 +60,13 @@ function _setup_urls(frm) {
 	const mode = frm.doc.sandbox ? "sandbox" : "production";
 	const urls = REVOLUT_URLS[mode];
 
-	if (
-		!frm.doc.api_base_url ||
-		frm.doc.api_base_url.includes("revolut.com")
-	) {
+	if (!frm.doc.api_base_url || frm.doc.api_base_url.includes("revolut.com")) {
 		frm.set_value("api_base_url", urls.api_base_url);
 	}
-	if (
-		!frm.doc.authorize_url ||
-		frm.doc.authorize_url.includes("revolut.com")
-	) {
+	if (!frm.doc.authorize_url || frm.doc.authorize_url.includes("revolut.com")) {
 		frm.set_value("authorize_url", urls.authorize_url);
 	}
-	if (
-		!frm.doc.token_url ||
-		frm.doc.token_url.includes("revolut.com")
-	) {
+	if (!frm.doc.token_url || frm.doc.token_url.includes("revolut.com")) {
 		frm.set_value("token_url", urls.token_url);
 	}
 }
@@ -88,8 +79,7 @@ function _setup_actions(frm) {
 		__("Generate Certificate"),
 		function () {
 			frappe.call({
-				method:
-					"erpnext_bank_import.connectors.revolut.generate_certificate",
+				method: "erpnext_bank_import.connectors.revolut.generate_certificate",
 				callback: function (r) {
 					if (!r.message) return;
 					const { private_key, public_certificate } = r.message;
@@ -114,12 +104,12 @@ function _setup_actions(frm) {
 								fieldtype: "HTML",
 								options: __(
 									"<p><strong>1.</strong> In Revolut Business → Settings → APIs → Add API certificate:</p>" +
-									"<p><strong>2.</strong> Paste the <strong>Public Certificate</strong> below</p>" +
-									"<p><strong>3.</strong> Set the <strong>OAuth Redirect URI</strong> to:</p>" +
-									'<pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;">' +
-									redirect_uri +
-									"</pre>" +
-									"<p><strong>4.</strong> Review the fields below, then click <strong>Save & Close</strong></p>"
+										"<p><strong>2.</strong> Paste the <strong>Public Certificate</strong> below</p>" +
+										"<p><strong>3.</strong> Set the <strong>OAuth Redirect URI</strong> to:</p>" +
+										'<pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;">' +
+										redirect_uri +
+										"</pre>" +
+										"<p><strong>4.</strong> Review the fields below, then click <strong>Save & Close</strong></p>"
 								),
 							},
 							{
@@ -136,7 +126,9 @@ function _setup_actions(frm) {
 								label: __("JWT Issuer (iss) — your domain without https://"),
 								default: default_issuer,
 								reqd: 1,
-								description: __("Must match the domain in your OAuth Redirect URI. For Revolut, set this without 'https://' (e.g. erp.mycompany.com)"),
+								description: __(
+									"Must match the domain in your OAuth Redirect URI. For Revolut, set this without 'https://' (e.g. erp.mycompany.com)"
+								),
 							},
 							{
 								fieldtype: "Data",
@@ -167,8 +159,7 @@ function _setup_actions(frm) {
 		__("Authorize Connector"),
 		function () {
 			frappe.call({
-				method:
-					"erpnext_bank_import.connectors.revolut.start_oauth_flow",
+				method: "erpnext_bank_import.connectors.revolut.start_oauth_flow",
 				args: { connector_name: frm.doc.connector_name },
 				callback: function (r) {
 					if (r.message) {

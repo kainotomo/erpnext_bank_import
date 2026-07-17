@@ -1,6 +1,6 @@
 // Client-side script for Bank Connector form
-// - Auto-fills API URLs based on Sandbox Mode for Revolut
-// - Adds an "Authorize Connector" button
+// - Auto-fills API URLs based on Sandbox Mode for Revolut or BoC
+// - Adds provider-specific action buttons after save
 
 const REVOLUT_URLS = {
 	sandbox: {
@@ -15,11 +15,26 @@ const REVOLUT_URLS = {
 	},
 };
 
+const BOC_URLS = {
+	sandbox: {
+		api_base_url: "https://sandbox-apis.bankofcyprus.com/df-boc-org-sb/sb/psd2",
+		authorize_url: "https://sandbox-apis.bankofcyprus.com/df-boc-org-sb/sb/psd2/oauth2/authorize",
+		token_url: "https://sandbox-apis.bankofcyprus.com/df-boc-org-sb/sb/psd2/oauth2/token",
+	},
+	production: {
+		api_base_url: "https://apis.bankofcyprus.com/df-boc-org-prd/prod/psd2",
+		authorize_url: "https://apis.bankofcyprus.com/df-boc-org-prd/prod/psd2/oauth2/authorize",
+		token_url: "https://apis.bankofcyprus.com/df-boc-org-prd/prod/psd2/oauth2/token",
+	},
+};
+
 frappe.ui.form.on("Bank Connector", {
 	refresh: function (frm) {
-		// Auto-fill URLs for Revolut on every load (new and existing)
+		// Auto-fill URLs for known providers on every load
 		if (frm.doc.provider_name === "revolut") {
 			_setup_urls(frm);
+		} else if (frm.doc.provider_name === "bank_of_cyprus") {
+			_setup_boc_urls(frm);
 		}
 		// Only show action buttons after first save
 		if (!frm.doc.__islocal) {
@@ -28,13 +43,20 @@ frappe.ui.form.on("Bank Connector", {
 	},
 
 	sandbox: function (frm) {
-		_setup_urls(frm);
+		if (frm.doc.provider_name === "revolut") {
+			_setup_urls(frm);
+		} else if (frm.doc.provider_name === "bank_of_cyprus") {
+			_setup_boc_urls(frm);
+		}
 	},
 
 	provider_name: function (frm) {
 		if (frm.doc.provider_name === "revolut") {
 			frm.set_value("sandbox", 1);
 			_setup_urls(frm);
+		} else if (frm.doc.provider_name === "bank_of_cyprus") {
+			frm.set_value("sandbox", 1);
+			_setup_boc_urls(frm);
 		}
 	},
 });
@@ -42,17 +64,15 @@ frappe.ui.form.on("Bank Connector", {
 function _setup_urls(frm) {
 	if (frm.doc.provider_name !== "revolut") return;
 
-	// Set auth method
-	if (!frm.doc.auth_method) {
-		frm.set_value("auth_method", "oauth2");
-	}
+	// Always set auth method for Revolut.
+	frm.set_value("auth_method", "oauth2");
 
-	// Set scopes for read-only access
+	// Set scopes for read-only access (only if not already customised).
 	if (!frm.doc.scopes) {
 		frm.set_value("scopes", "READ");
 	}
 
-	// Set JWT issuer to current domain
+	// Set JWT issuer to current domain (only if not already customised).
 	if (!frm.doc.jwt_issuer) {
 		frm.set_value("jwt_issuer", window.location.hostname);
 	}
@@ -60,20 +80,58 @@ function _setup_urls(frm) {
 	const mode = frm.doc.sandbox ? "sandbox" : "production";
 	const urls = REVOLUT_URLS[mode];
 
-	if (!frm.doc.api_base_url || frm.doc.api_base_url.includes("revolut.com")) {
-		frm.set_value("api_base_url", urls.api_base_url);
-	}
-	if (!frm.doc.authorize_url || frm.doc.authorize_url.includes("revolut.com")) {
-		frm.set_value("authorize_url", urls.authorize_url);
-	}
-	if (!frm.doc.token_url || frm.doc.token_url.includes("revolut.com")) {
-		frm.set_value("token_url", urls.token_url);
+	// Always set the API URLs — the user just selected Revolut or toggled sandbox.
+	frm.set_value("api_base_url", urls.api_base_url);
+	frm.set_value("authorize_url", urls.authorize_url);
+	frm.set_value("token_url", urls.token_url);
+
+	// Set default redirect URI (only if not already customised).
+	if (!frm.doc.redirect_uri) {
+		const default_redirect =
+			window.location.origin +
+			"/api/method/erpnext_bank_import.connectors.revolut.oauth_callback";
+		frm.set_value("redirect_uri", default_redirect);
 	}
 }
 
+function _setup_boc_urls(frm) {
+	if (frm.doc.provider_name !== "bank_of_cyprus") return;
+
+	// Always set auth method for BoC.
+	frm.set_value("auth_method", "oauth2");
+
+	// Set scopes for BoC (both TPP and User OAuth2 scopes).
+	frm.set_value("scopes", "TPPOAuth2Security UserOAuth2Security");
+
+	const mode = frm.doc.sandbox ? "sandbox" : "production";
+	const urls = BOC_URLS[mode];
+
+	// Always set the API URLs — the user just selected BoC or toggled sandbox.
+	frm.set_value("api_base_url", urls.api_base_url);
+	frm.set_value("authorize_url", urls.authorize_url);
+	frm.set_value("token_url", urls.token_url);
+
+	// Always set the redirect URI to match the current site origin.
+	const default_redirect =
+		window.location.origin +
+		"/api/method/erpnext_bank_import.connectors.bank_of_cyprus.oauth_callback";
+	frm.set_value("redirect_uri", default_redirect);
+}
+
 function _setup_actions(frm) {
-	if (frm.doc.provider_name !== "revolut") return;
-	if (frm.doc.__islocal) return; // only show after first save
+	if (frm.doc.provider_name === "revolut") {
+		_setup_revolut_actions(frm);
+	} else if (frm.doc.provider_name === "bank_of_cyprus") {
+		_setup_boc_actions(frm);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Revolut-specific actions
+// ---------------------------------------------------------------------------
+
+function _setup_revolut_actions(frm) {
+	if (frm.doc.__islocal) return;
 
 	frm.add_custom_button(
 		__("Generate Certificate"),
@@ -158,15 +216,55 @@ function _setup_actions(frm) {
 	frm.add_custom_button(
 		__("Authorize Connector"),
 		function () {
-			frappe.call({
-				method: "erpnext_bank_import.connectors.revolut.start_oauth_flow",
-				args: { connector_name: frm.doc.connector_name },
-				callback: function (r) {
-					if (r.message) {
-						window.open(r.message, "_blank");
-					}
-				},
-			});
+			// Save first if there are unsaved changes, then call the backend.
+			var callback = function () {
+				frappe.call({
+					method: "erpnext_bank_import.connectors.revolut.start_oauth_flow",
+					args: { connector_name: frm.doc.connector_name },
+					callback: function (r) {
+						if (r.message) {
+							window.open(r.message, "_blank");
+						}
+					},
+				});
+			};
+			if (frm.is_dirty()) {
+				frm.save(null, null, null, callback);
+			} else {
+				callback();
+			}
+		},
+		__("Actions")
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Bank of Cyprus-specific actions
+// ---------------------------------------------------------------------------
+
+function _setup_boc_actions(frm) {
+	if (frm.doc.__islocal) return;
+
+	frm.add_custom_button(
+		__("Authorize Connector"),
+		function () {
+			// Save first if there are unsaved changes, then call the backend.
+			var callback = function () {
+				frappe.call({
+					method: "erpnext_bank_import.connectors.bank_of_cyprus.start_oauth_flow",
+					args: { connector_name: frm.doc.connector_name },
+					callback: function (r) {
+						if (r.message) {
+							window.open(r.message, "_blank");
+						}
+					},
+				});
+			};
+			if (frm.is_dirty()) {
+				frm.save(null, null, null, callback);
+			} else {
+				callback();
+			}
 		},
 		__("Actions")
 	);

@@ -46,10 +46,12 @@ from erpnext_bank_import.connectors.config import ConnectorConfig
 from erpnext_bank_import.connectors.exceptions import ConfigurationError
 from erpnext_bank_import.connectors.mock_provider import MockProvider
 from erpnext_bank_import.connectors.revolut import RevolutConnector
+from erpnext_bank_import.connectors.bank_of_cyprus import BankOfCyprusConnector
 
 PROVIDER_REGISTRY: dict[str, type[BankConnector]] = {
 	"mock": MockProvider,
 	"revolut": RevolutConnector,
+	"bank_of_cyprus": BankOfCyprusConnector,
 }
 """Mapping from provider slug to ``BankConnector`` subclass.
 

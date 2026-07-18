@@ -130,6 +130,10 @@ _EXCEPTION_ACTIONS: dict[type, str] = {
 		"may be temporarily unavailable. Check the bank's service status "
 		"page. The next scheduled import will try again."
 	),
+	NotImplementedError: (
+		"This feature has not been implemented yet for the selected bank provider. "
+		"Check the release notes or contact support for availability."
+	),
 }
 
 

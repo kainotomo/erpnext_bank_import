@@ -28,6 +28,19 @@ const BOC_URLS = {
 	},
 };
 
+const EUROBANK_URLS = {
+	sandbox: {
+		api_base_url: "https://sandbox-apis.hellenicbank.com",
+		authorize_url: "https://sandbox-oauth.hellenicbank.com/v2/oauth2/auth",
+		token_url: "https://sandbox-oauth.hellenicbank.com/v2/token/exchange",
+	},
+	production: {
+		api_base_url: "https://apisprod.hellenicbank.com",
+		authorize_url: "https://oauthprod.hellenicbank.com/v2/oauth2/auth",
+		token_url: "https://oauthprod.hellenicbank.com/v2/token/exchange",
+	},
+};
+
 frappe.ui.form.on("Bank Connector", {
 	refresh: function (frm) {
 		// Auto-fill URLs for known providers on every load
@@ -35,6 +48,8 @@ frappe.ui.form.on("Bank Connector", {
 			_setup_urls(frm);
 		} else if (frm.doc.provider_name === "bank_of_cyprus") {
 			_setup_boc_urls(frm);
+		} else if (frm.doc.provider_name === "eurobank") {
+			_setup_eurobank_urls(frm);
 		}
 		// Only show action buttons after first save
 		if (!frm.doc.__islocal) {
@@ -47,6 +62,8 @@ frappe.ui.form.on("Bank Connector", {
 			_setup_urls(frm);
 		} else if (frm.doc.provider_name === "bank_of_cyprus") {
 			_setup_boc_urls(frm);
+		} else if (frm.doc.provider_name === "eurobank") {
+			_setup_eurobank_urls(frm);
 		}
 	},
 
@@ -57,6 +74,9 @@ frappe.ui.form.on("Bank Connector", {
 		} else if (frm.doc.provider_name === "bank_of_cyprus") {
 			frm.set_value("sandbox", 1);
 			_setup_boc_urls(frm);
+		} else if (frm.doc.provider_name === "eurobank") {
+			frm.set_value("sandbox", 1);
+			_setup_eurobank_urls(frm);
 		}
 	},
 });
@@ -118,11 +138,37 @@ function _setup_boc_urls(frm) {
 	frm.set_value("redirect_uri", default_redirect);
 }
 
+function _setup_eurobank_urls(frm) {
+	if (frm.doc.provider_name !== "eurobank") return;
+
+	// Always set auth method for Eurobank.
+	frm.set_value("auth_method", "oauth2");
+
+	// Set B2B scopes for account information service.
+	frm.set_value("scopes", "v2.b2b.get.accounts,v2.b2b.get.account.details,v2.b2b.get.account.transactions");
+
+	const mode = frm.doc.sandbox ? "sandbox" : "production";
+	const urls = EUROBANK_URLS[mode];
+
+	// Always set the API URLs — the user just selected Eurobank or toggled sandbox.
+	frm.set_value("api_base_url", urls.api_base_url);
+	frm.set_value("authorize_url", urls.authorize_url);
+	frm.set_value("token_url", urls.token_url);
+
+	// Set the redirect URI to the callback endpoint.
+	const default_redirect =
+		window.location.origin +
+		"/api/method/erpnext_bank_import.connectors.eurobank.oauth_callback";
+	frm.set_value("redirect_uri", default_redirect);
+}
+
 function _setup_actions(frm) {
 	if (frm.doc.provider_name === "revolut") {
 		_setup_revolut_actions(frm);
 	} else if (frm.doc.provider_name === "bank_of_cyprus") {
 		_setup_boc_actions(frm);
+	} else if (frm.doc.provider_name === "eurobank") {
+		_setup_eurobank_actions(frm);
 	}
 }
 
@@ -252,6 +298,38 @@ function _setup_boc_actions(frm) {
 			var callback = function () {
 				frappe.call({
 					method: "erpnext_bank_import.connectors.bank_of_cyprus.start_oauth_flow",
+					args: { connector_name: frm.doc.connector_name },
+					callback: function (r) {
+						if (r.message) {
+							window.open(r.message, "_blank");
+						}
+					},
+				});
+			};
+			if (frm.is_dirty()) {
+				frm.save(null, null, null, callback);
+			} else {
+				callback();
+			}
+		},
+		__("Actions")
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Eurobank-specific actions
+// ---------------------------------------------------------------------------
+
+function _setup_eurobank_actions(frm) {
+	if (frm.doc.__islocal) return;
+
+	frm.add_custom_button(
+		__("Authorize Connector"),
+		function () {
+			// Save first if there are unsaved changes, then call the backend.
+			var callback = function () {
+				frappe.call({
+					method: "erpnext_bank_import.connectors.eurobank.start_oauth_flow",
 					args: { connector_name: frm.doc.connector_name },
 					callback: function (r) {
 						if (r.message) {

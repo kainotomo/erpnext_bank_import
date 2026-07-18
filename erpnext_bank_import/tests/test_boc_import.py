@@ -25,7 +25,7 @@ import pytest
 
 from erpnext_bank_import.connectors.bank_of_cyprus import BankOfCyprusConnector
 from erpnext_bank_import.connectors.config import ConnectorConfig
-from erpnext_bank_import.connectors.exceptions import AuthenticationError
+from erpnext_bank_import.connectors.exceptions import ApiError, AuthenticationError
 from erpnext_bank_import.tests.fixtures.boc_fixtures import (
     MOCK_BOC_STATEMENT,
     MOCK_BOC_STATEMENT_EMPTY,
@@ -496,3 +496,452 @@ class TestBocImportPagination:
         assert result["status"] == "success"
         assert result["results"][0]["created"] == 150  # 100 + 50
         assert result["results"][0]["skipped"] == 0
+
+
+# =========================================================================
+# Multi-account mapping tests
+# =========================================================================
+
+
+class TestBocMultiAccountMapping:
+    """BoC import with multiple enabled account mappings."""
+
+    @pytest.fixture(autouse=True)
+    def _frappe_patches(self):
+        """Apply Frappe patches for every test in this class."""
+        frappe_patches = [
+            patch(
+                "erpnext_bank_import.services.import_service.get_connector_config",
+                return_value=_make_boc_config(),
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_cached_value",
+                return_value="_Test Company",
+            ),
+            patch("erpnext_bank_import.services.import_service.frappe.log_error"),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.utils.today",
+                return_value="2026-07-10",
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.utils.nowdate",
+                return_value="2026-07-10",
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.utils.add_days",
+                return_value="2026-04-11",
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.publish_realtime",
+            ),
+        ]
+        for p in frappe_patches:
+            p.start()
+        yield
+        for p in frappe_patches:
+            p.stop()
+
+    def _make_multi_mapping_doc(self) -> MockBankConnectorDoc:
+        """Build a connector doc with 2 enabled account mappings."""
+        mappings = [
+            MockMapping(
+                provider_account_id="351012345671",
+                bank_account="BA-BoC-CURRENT-001",
+            ),
+            MockMapping(
+                provider_account_id="351092345672",
+                bank_account="BA-BoC-BUSINESS-002",
+            ),
+        ]
+        return MockBankConnectorDoc(enabled=True, mappings=mappings)
+
+    def test_import_multiple_account_mappings(self):
+        """Import processes all enabled account mappings."""
+        from erpnext_bank_import.services.import_service import import_transactions
+
+        connector = _make_boc_connector()
+        normalized = _mock_normalized_from_statement(MOCK_BOC_STATEMENT)
+
+        with (
+            patch.object(connector, "is_authenticated", return_value=True),
+            patch.object(
+                connector,
+                "fetch_all_transactions",
+                return_value=normalized,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.get_connector",
+                return_value=connector,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_all",
+                return_value=[],
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_doc",
+                side_effect=lambda doctype, docname="": (
+                    self._make_multi_mapping_doc()
+                    if doctype == "Bank Connector"
+                    else _default_doc_side_effect(doctype, docname)
+                ),
+            ),
+        ):
+            result = import_transactions(
+                connector_name="BoC-Test-001",
+                trigger="Manual",
+            )
+
+        assert result["status"] == "success"
+        # 2 mappings × 5 transactions each
+        assert len(result["results"]) == 2
+        for r in result["results"]:
+            assert r["created"] == 5
+            assert r["skipped"] == 0
+            assert r["error"] is None
+
+    def test_import_partial_account_failure_isolated(self):
+        """Failure in one account mapping does not block others."""
+        from erpnext_bank_import.services.import_service import import_transactions
+
+        connector = _make_boc_connector()
+        normalized = _mock_normalized_from_statement(MOCK_BOC_STATEMENT)
+
+        # Make the second call to fetch_all_transactions fail.
+        call_count = 0
+
+        def _fetch_with_failure(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise ApiError("Second account failed")
+            return normalized
+
+        with (
+            patch.object(connector, "is_authenticated", return_value=True),
+            patch.object(
+                connector,
+                "fetch_all_transactions",
+                side_effect=_fetch_with_failure,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.get_connector",
+                return_value=connector,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_all",
+                return_value=[],
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_doc",
+                side_effect=lambda doctype, docname="": (
+                    self._make_multi_mapping_doc()
+                    if doctype == "Bank Connector"
+                    else _default_doc_side_effect(doctype, docname)
+                ),
+            ),
+        ):
+            result = import_transactions(
+                connector_name="BoC-Test-001",
+                trigger="Manual",
+            )
+
+        # First mapping succeeded, second failed.
+        assert result["status"] == "partial"
+        assert result["results"][0]["created"] == 5
+        assert result["results"][0]["error"] is None
+        assert result["results"][1]["created"] == 0
+        # Error is wrapped by diagnostics service with a human-readable message.
+        err = result["results"][1]["error"] or ""
+        assert "fetching transactions" in err.lower()
+
+
+# =========================================================================
+# Incremental sync tests
+# =========================================================================
+
+
+class TestBocIncrementalSync:
+    """BoC incremental import with last_synced_at cursor."""
+
+    @pytest.fixture(autouse=True)
+    def _frappe_patches(self):
+        """Apply Frappe patches for every test in this class."""
+        from datetime import date
+
+        def _getdate_side_effect(d: str | None = None) -> date:
+            """Return a date object matching the input, defaulting to 2026-07-01."""
+            if d is None:
+                return date.today()
+            parts = d.split("-")
+            return date(int(parts[0]), int(parts[1]), int(parts[2]))
+
+        frappe_patches = [
+            patch(
+                "erpnext_bank_import.services.import_service.get_connector_config",
+                return_value=_make_boc_config(),
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_cached_value",
+                return_value="_Test Company",
+            ),
+            patch("erpnext_bank_import.services.import_service.frappe.log_error"),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.utils.today",
+                return_value="2026-07-10",
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.utils.nowdate",
+                return_value="2026-07-10",
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.utils.add_days",
+                return_value="2026-04-11",
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.publish_realtime",
+            ),
+            # getdate returns a proper date based on input
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.utils.getdate",
+                side_effect=_getdate_side_effect,
+            ),
+        ]
+        for p in frappe_patches:
+            p.start()
+        yield
+        for p in frappe_patches:
+            p.stop()
+
+    def test_incremental_sync_uses_last_synced_at(self):
+        """Incremental sync passes last_synced_at as date_from to fetch."""
+        from erpnext_bank_import.services.import_service import import_transactions
+
+        connector = _make_boc_connector()
+        normalized = _mock_normalized_from_statement(MOCK_BOC_STATEMENT)
+
+        # Mock the mapping with last_synced_at set.
+        mock_mapping = MockMapping(
+            provider_account_id="351012345671",
+            bank_account="BA-BoC-001",
+            is_enabled=True,
+            last_synced_at="2026-07-01",
+        )
+        mock_doc = MockBankConnectorDoc(enabled=True, mappings=[mock_mapping])
+
+        with (
+            patch.object(connector, "is_authenticated", return_value=True),
+            patch.object(
+                connector,
+                "fetch_all_transactions",
+                return_value=normalized,
+            ) as mock_fetch,
+            patch(
+                "erpnext_bank_import.services.import_service.get_connector",
+                return_value=connector,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_all",
+                return_value=[],
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_doc",
+                side_effect=lambda doctype, docname="": (
+                    mock_doc
+                    if doctype == "Bank Connector"
+                    else _default_doc_side_effect(doctype, docname)
+                ),
+            ),
+        ):
+            result = import_transactions(
+                connector_name="BoC-Test-001",
+                trigger="Manual",
+            )
+
+        assert result["status"] == "success"
+        # fetch_all_transactions should have been called with date_from
+        # matching last_synced_at (2026-07-01).
+        call_args = mock_fetch.call_args
+        assert call_args is not None
+        _, kwargs = call_args
+        assert kwargs.get("date_from") == "2026-07-01"
+
+    def test_incremental_sync_without_last_synced_at(self):
+        """No last_synced_at falls back to default window calculation."""
+        from erpnext_bank_import.services.import_service import import_transactions
+
+        connector = _make_boc_connector()
+        normalized = _mock_normalized_from_statement(MOCK_BOC_STATEMENT)
+
+        # Mock mapping without last_synced_at.
+        mock_mapping = MockMapping(
+            provider_account_id="351012345671",
+            bank_account="BA-BoC-001",
+            is_enabled=True,
+            last_synced_at=None,
+        )
+        mock_doc = MockBankConnectorDoc(enabled=True, mappings=[mock_mapping])
+
+        with (
+            patch.object(connector, "is_authenticated", return_value=True),
+            patch.object(
+                connector,
+                "fetch_all_transactions",
+                return_value=normalized,
+            ) as mock_fetch,
+            patch(
+                "erpnext_bank_import.services.import_service.get_connector",
+                return_value=connector,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_all",
+                return_value=[],
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_doc",
+                side_effect=lambda doctype, docname="": (
+                    mock_doc
+                    if doctype == "Bank Connector"
+                    else _default_doc_side_effect(doctype, docname)
+                ),
+            ),
+        ):
+            result = import_transactions(
+                connector_name="BoC-Test-001",
+                trigger="Manual",
+            )
+
+        assert result["status"] == "success"
+        # Without last_synced_at, date_from should be the default
+        # calculated window (add_days returns "2026-04-11").
+        call_args = mock_fetch.call_args
+        assert call_args is not None
+        _, kwargs = call_args
+        assert kwargs.get("date_from") == "2026-04-11"
+
+    def test_incremental_sync_updates_cursor(self):
+        """After import, last_synced_at is updated to the max transaction date."""
+        from erpnext_bank_import.services.import_service import import_transactions
+
+        connector = _make_boc_connector()
+        normalized = _mock_normalized_from_statement(MOCK_BOC_STATEMENT)
+
+        mock_mapping = MockMapping(
+            provider_account_id="351012345671",
+            bank_account="BA-BoC-001",
+            is_enabled=True,
+            last_synced_at="2024-01-01",
+        )
+        mock_doc = MockBankConnectorDoc(enabled=True, mappings=[mock_mapping])
+
+        with (
+            patch.object(connector, "is_authenticated", return_value=True),
+            patch.object(
+                connector,
+                "fetch_all_transactions",
+                return_value=normalized,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.get_connector",
+                return_value=connector,
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_all",
+                return_value=[],
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.frappe.get_doc",
+                side_effect=lambda doctype, docname="": (
+                    mock_doc
+                    if doctype == "Bank Connector"
+                    else _default_doc_side_effect(doctype, docname)
+                ),
+            ),
+        ):
+            result = import_transactions(
+                connector_name="BoC-Test-001",
+                trigger="Manual",
+            )
+
+        assert result["status"] == "success"
+        # After import, cursor should be updated to the max date among the
+        # imported transactions = 2024-05-09 (the latest date in MOCK_BOC_STATEMENT).
+        assert mock_mapping.last_synced_at == "2024-05-09"
+
+
+# =========================================================================
+# Import all enabled connectors (scheduled job integration)
+# =========================================================================
+
+
+class TestBocImportAllEnabledConnectors:
+    """BoC-specific tests for the scheduled import_all_enabled_connectors job."""
+
+    def test_boc_import_via_scheduled_job(self):
+        """import_all_enabled_connectors triggers BoC connector import."""
+        from erpnext_bank_import.services.import_service import (
+            import_all_enabled_connectors,
+        )
+
+        with (
+            patch(
+                "erpnext_bank_import.services.import_service.get_all_enabled_connectors",
+                return_value=["BoC-Test-001"],
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.import_transactions",
+                return_value={"status": "success", "results": [{"created": 5}]},
+            ) as mock_import,
+        ):
+            result = import_all_enabled_connectors()
+
+        mock_import.assert_called_once_with(
+            "BoC-Test-001",
+            trigger="Scheduled",
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["status"] == "success"
+
+    def test_boc_import_scheduled_failure_isolated(self):
+        """BoC failure in scheduled job does not affect other connectors."""
+        from erpnext_bank_import.services.import_service import (
+            import_all_enabled_connectors,
+        )
+
+        call_results: dict[str, dict] = {}
+
+        def _import_side_effect(
+            connector_name: str,
+            **kwargs: Any,
+        ) -> dict:
+            result = {
+                "status": "success" if connector_name == "Other-C001" else "error",
+                "results": [
+                    {
+                        "created": 5 if connector_name == "Other-C001" else 0,
+                        "error": None if connector_name == "Other-C001" else "Auth failed",
+                    }
+                ],
+            }
+            call_results[connector_name] = result
+            return result
+
+        with (
+            patch(
+                "erpnext_bank_import.services.import_service.get_all_enabled_connectors",
+                return_value=["BoC-Test-001", "Other-C001"],
+            ),
+            patch(
+                "erpnext_bank_import.services.import_service.import_transactions",
+                side_effect=_import_side_effect,
+            ),
+        ):
+            result = import_all_enabled_connectors()
+
+        # Both connectors should have been called.
+        assert "BoC-Test-001" in call_results
+        assert "Other-C001" in call_results
+        # BoC failed, other succeeded — the scheduled job does not
+        # raise, it just logs errors.
+        assert isinstance(result, list)
+        assert len(result) == 2

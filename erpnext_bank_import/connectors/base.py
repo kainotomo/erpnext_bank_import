@@ -220,6 +220,7 @@ class BankConnector(ABC):
 		date_to: str,
 		*,
 		page_size: int = 100,
+		max_pages: int = 1000,
 	) -> list[NormalizedTransaction]:
 		"""Fetch **all** transactions for the given account, handling pagination.
 
@@ -231,6 +232,9 @@ class BankConnector(ABC):
 		    date_from: Start date in ``YYYY-MM-DD`` format (inclusive).
 		    date_to: End date in ``YYYY-MM-DD`` format (inclusive).
 		    page_size: Maximum transactions per page.
+		    max_pages: Safety limit on the number of pages fetched
+		        (default 1000).  Prevents unbounded loops from
+		        cursor-based pagination edge cases.
 
 		Returns:
 		    A flat list of all ``NormalizedTransaction`` dicts across
@@ -238,12 +242,27 @@ class BankConnector(ABC):
 		"""
 		all_txns: list[NormalizedTransaction] = []
 		page_token: str | None = None
+		page_count: int = 0
 
 		# Lazy import to avoid circular dependency:
 		# connectors.base -> services.retry -> connectors.exceptions
 		from erpnext_bank_import.services.retry import retry
 
 		while True:
+			# Safety: prevent unbounded loops from cursor edge cases.
+			page_count += 1
+			if page_count > max_pages:
+				import frappe
+				frappe.log_error(
+					message=(
+						f"fetch_all_transactions reached max_pages={max_pages} "
+						f"for account {account_id} (date_from={date_from}, "
+						f"date_to={date_to}). Stopping pagination."
+					),
+					title="BoC Pagination Safety Limit",
+				)
+				break
+
 			# Each page call is individually retried so a single transient
 			# failure does not abort the entire multi-page fetch.
 			page, page_token = retry(

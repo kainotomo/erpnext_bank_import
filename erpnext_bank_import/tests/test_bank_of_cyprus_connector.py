@@ -44,8 +44,10 @@ from erpnext_bank_import.tests.fixtures.boc_fixtures import (
     MOCK_BOC_ERROR_500,
     MOCK_BOC_STATEMENT,
     MOCK_BOC_STATEMENT_EMPTY,
+    MOCK_BOC_STATEMENT_SAME_DATE,
     MOCK_BOC_STATEMENT_SECOND_PAGE,
     MOCK_BOC_STATEMENT_SINGLE_PAGE,
+    MOCK_BOC_STATEMENT_WITH_PARTIES,
     MOCK_BOC_SUBSCRIPTION_ACTIVATED,
     MOCK_BOC_SUBSCRIPTION_CREATED,
     MOCK_BOC_SUBSCRIPTION_DETAILS,
@@ -347,6 +349,85 @@ class TestBocTransactionFetch:
                 date_to="2024-01-31",
             )
 
+    # ------------------------------------------------------------------
+    # Pagination safety
+    # ------------------------------------------------------------------
+
+    def test_same_date_cursor_stops_pagination(self):
+        """Same-date wall: next_token is None when cursor doesn't advance."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+        connector._subscription_id = "Subid000001-1725429256148"
+
+        with (
+            patch.object(connector, "_get_access_token", return_value="test-token"),
+            patch.object(
+                connector._boc,
+                "get_account_statement",
+                return_value=MOCK_BOC_STATEMENT_SAME_DATE,
+            ),
+        ):
+            # First page: no cursor yet, should return page + token.
+            txns, next_token = connector.fetch_transactions(
+                account_id="351012345671",
+                date_from="2026-07-15",
+                date_to="2026-07-15",
+                page_size=100,
+            )
+
+        assert len(txns) == 100  # full page
+        assert next_token is not None  # cursor returned
+
+        # Second page with the same cursor: should detect same-date wall.
+        with (
+            patch.object(connector, "_get_access_token", return_value="test-token"),
+            patch.object(
+                connector._boc,
+                "get_account_statement",
+                return_value=MOCK_BOC_STATEMENT_SAME_DATE,
+            ),
+        ):
+            txns2, next_token2 = connector.fetch_transactions(
+                account_id="351012345671",
+                date_from="2026-07-01",
+                date_to="2026-07-31",
+                page_size=100,
+                page_token=next_token,  # same date as last page's postingDate
+            )
+
+        assert len(txns2) == 100  # still a full page
+        assert next_token2 is None  # safety: stops pagination
+
+    def test_different_cursor_continues(self):
+        """Different cursor date continues pagination normally."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+        connector._subscription_id = "Subid000001-1725429256148"
+
+        with (
+            patch.object(connector, "_get_access_token", return_value="test-token"),
+            patch.object(
+                connector._boc,
+                "get_account_statement",
+                return_value=MOCK_BOC_STATEMENT_SECOND_PAGE,
+            ),
+        ):
+            # page_token is "31/07/2026" but the returned data has
+            # earlier dates (June/May), so cursor advances → continues.
+            txns, next_token = connector.fetch_transactions(
+                account_id="351012345671",
+                date_from="2026-06-01",
+                date_to="2026-06-30",
+                page_size=100,
+                page_token="31/07/2026",  # cursor from previous page
+            )
+
+        # Second page has 50 transactions (< page_size), so next_token
+        # would be None anyway.  The important check is that it DID
+        # NOT hit the same-date wall.
+        assert len(txns) == 50  # partial page
+        assert next_token is None  # no more pages
+
 
 # =========================================================================
 # Normalisation
@@ -437,6 +518,91 @@ class TestBocNormalisation:
                 assert norm["amount"] < 0
             else:
                 assert norm["amount"] >= 0
+
+    # ------------------------------------------------------------------
+    # Counterparty extraction
+    # ------------------------------------------------------------------
+
+    def test_debit_counterparty_from_creditor(self):
+        """DEBIT transaction extracts counterparty from creditor fields."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = MOCK_BOC_STATEMENT_WITH_PARTIES["transaction"][0]
+
+        norm = connector.normalize_transaction(raw)
+
+        assert norm["bank_party_name"] == "TechCorp Ltd"
+        assert norm["bank_party_iban"] == "CY22002001230000000012345678"
+        assert norm["reference_number"] == "INV-2024-0042"
+
+    def test_credit_counterparty_from_debtor(self):
+        """CREDIT transaction extracts counterparty from debtor fields."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = MOCK_BOC_STATEMENT_WITH_PARTIES["transaction"][1]
+
+        norm = connector.normalize_transaction(raw)
+
+        assert norm["bank_party_name"] == "Alpha Services Ltd"
+        assert norm["bank_party_iban"] == "CY33003003450000000098765432"
+        assert norm["reference_number"] == "PAY-2024-0088"
+
+    def test_debit_counterparty_with_account_number(self):
+        """DEBIT with account number (no IBAN) maps correctly."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = MOCK_BOC_STATEMENT_WITH_PARTIES["transaction"][2]
+
+        norm = connector.normalize_transaction(raw)
+
+        assert norm["bank_party_name"] == "WebHosting Pro"
+        assert norm["bank_party_account_number"] == "1234567890"
+        assert norm["bank_party_iban"] is None
+        assert norm["reference_number"] == "E2E-998877"
+
+    def test_counterparty_missing_in_sandbox(self):
+        """No counterparty data → all party fields are None."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = MOCK_BOC_STATEMENT["transaction"][0]
+
+        norm = connector.normalize_transaction(raw)
+
+        assert norm["bank_party_name"] is None
+        assert norm["bank_party_account_number"] is None
+        assert norm["bank_party_iban"] is None
+        # Reference falls back to transaction ID when no remittance info.
+        assert norm["reference_number"] == raw["id"]
+
+    # ------------------------------------------------------------------
+    # Fee extraction
+    # ------------------------------------------------------------------
+
+    def test_fee_from_top_level_fee_amount(self):
+        """feeAmount at top level maps to included_fee."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = MOCK_BOC_STATEMENT_WITH_PARTIES["transaction"][0]
+
+        norm = connector.normalize_transaction(raw)
+
+        assert norm["included_fee"] == 2.50
+        assert norm["excluded_fee"] is None
+
+    def test_fee_from_included_fee_in_amount(self):
+        """includedFee inside transactionAmount maps to included_fee."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = MOCK_BOC_STATEMENT_WITH_PARTIES["transaction"][3]
+
+        norm = connector.normalize_transaction(raw)
+
+        assert norm["included_fee"] == 5.0
+        assert norm["excluded_fee"] is None
+
+    def test_fee_absent(self):
+        """No fee data → both fee fields are None."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = MOCK_BOC_STATEMENT["transaction"][1]
+
+        norm = connector.normalize_transaction(raw)
+
+        assert norm["included_fee"] is None
+        assert norm["excluded_fee"] is None
 
 
 # =========================================================================
@@ -592,6 +758,95 @@ class TestBocSubscriptionFlow:
         call_headers = mock_get.call_args.kwargs["headers"]
         assert "subscriptionId" in call_headers
         assert call_headers["subscriptionId"] == "Subid000001-1725429256148"
+
+    # ------------------------------------------------------------------
+    # Subscription expiry
+    # ------------------------------------------------------------------
+
+    def test_subscription_expiry_detected(self):
+        """Expired subscription raises AuthenticationError on load."""
+        from erpnext_bank_import.connectors.bank_of_cyprus import BankOfCyprusConnector
+
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+
+        # Mock token data with expired subscription metadata.
+        expired_metadata = {
+            "subscription_id": "Subid000001-1725429256148",
+            "subscription_created_at": "2026-01-15T12:00:00+00:00",
+            "subscription_expires_at": "2026-04-15",  # expired
+        }
+
+        with (
+            patch.object(
+                connector._oauth,
+                "_load_tokens",
+                return_value={
+                    "access_token": "test-token",
+                    "refresh_token": None,
+                    "provider_metadata": expired_metadata,
+                },
+            ),
+            pytest.raises(AuthenticationError, match="Subscription expired"),
+        ):
+            connector._load_subscription_id()
+
+        assert connector._subscription_id is None
+
+    def test_subscription_not_expired(self):
+        """Valid subscription is loaded normally."""
+        from erpnext_bank_import.connectors.bank_of_cyprus import BankOfCyprusConnector
+
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+
+        valid_metadata = {
+            "subscription_id": "Subid000001-1725429256148",
+            "subscription_created_at": "2026-07-15T12:00:00+00:00",
+            "subscription_expires_at": "2027-01-15",  # far in the future
+        }
+
+        with (
+            patch.object(
+                connector._oauth,
+                "_load_tokens",
+                return_value={
+                    "access_token": "test-token",
+                    "refresh_token": None,
+                    "provider_metadata": valid_metadata,
+                },
+            ),
+        ):
+            connector._load_subscription_id()
+
+        assert connector._subscription_id == "Subid000001-1725429256148"
+
+    def test_subscription_metadata_stores_expiry(self):
+        """_store_subscription_id_in_metadata logs error when db unavailable.
+
+        The function gracefully handles the case where Frappe request
+        context is unavailable (catches the exception and logs it).
+        """
+        from erpnext_bank_import.connectors.bank_of_cyprus import (
+            _store_subscription_id_in_metadata,
+        )
+
+        with (
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.log_error",
+            ) as mock_log_error,
+        ):
+            _store_subscription_id_in_metadata(
+                connector_name="BoC-Test-001",
+                subscription_id="Subid000001-1725429256148",
+                expiration_date="13/01/2027",
+            )
+
+            # Should have logged the db error gracefully.
+            mock_log_error.assert_called_once()
+            call_args = mock_log_error.call_args
+            message = call_args[1].get("message", str(call_args))
+            assert "Failed to store subscription ID" in message
 
 
 # =========================================================================

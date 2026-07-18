@@ -32,7 +32,6 @@ from erpnext_bank_import.connectors.exceptions import (
     ApiError,
     AuthenticationError,
     ConfigurationError,
-    NetworkError,
     NormalizationError,
     ServerError,
     TokenExpiredError,
@@ -657,6 +656,137 @@ class TestBocErrorHandling:
         with pytest.raises(ServerError, match="(?i)unexpected error"):
             svc._handle_error(mock_resp, "test operation")
 
+    # ------------------------------------------------------------------
+    # Connector-level error propagation
+    # ------------------------------------------------------------------
+
+    def test_fetch_transactions_network_error(self):
+        """Network error during fetch_transactions propagates as ApiError.
+
+        The BocSubscriptionService wraps ``requests.RequestException``
+        in ``ApiError`` before it reaches the connector.
+        """
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+        connector._subscription_id = "Subid000001-1725429256148"
+
+        with (
+            patch.object(connector, "_get_access_token", return_value="test-token"),
+            patch.object(
+                connector._boc,
+                "get_account_statement",
+                side_effect=ApiError(
+                    "Get account statement failed: Connection refused",
+                    status_code=0,
+                ),
+            ),
+        ):
+            with pytest.raises(ApiError, match="(?i)connection refused"):
+                connector.fetch_transactions(
+                    account_id="351012345671",
+                    date_from="2024-01-01",
+                    date_to="2024-01-31",
+                )
+
+    def test_fetch_transactions_timeout_error(self):
+        """Timeout during fetch_transactions propagates as ApiError."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+        connector._subscription_id = "Subid000001-1725429256148"
+
+        with (
+            patch.object(connector, "_get_access_token", return_value="test-token"),
+            patch.object(
+                connector._boc,
+                "get_account_statement",
+                side_effect=ApiError(
+                    "Get account statement failed: Request timed out",
+                    status_code=0,
+                ),
+            ),
+        ):
+            with pytest.raises(ApiError, match="(?i)timed out"):
+                connector.fetch_transactions(
+                    account_id="351012345671",
+                    date_from="2024-01-01",
+                    date_to="2024-01-31",
+                )
+
+    def test_get_accounts_network_error(self):
+        """Network error during get_accounts propagates as ApiError."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+        connector._subscription_id = "Subid000001-1725429256148"
+
+        with (
+            patch.object(connector, "_get_access_token", return_value="test-token"),
+            patch.object(
+                connector._boc,
+                "get_accounts",
+                side_effect=ApiError(
+                    "Get accounts request failed: DNS resolution failed",
+                    status_code=0,
+                ),
+            ),
+        ):
+            with pytest.raises(ApiError, match="(?i)DNS"):
+                connector.get_accounts()
+
+
+class TestBocToAccountInfo:
+    """Verifies _to_account_info() handles malformed account data."""
+
+    def test_missing_account_id(self):
+        """Missing accountId defaults to empty string."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = {"currency": "EUR", "accountName": "No ID Account"}
+        info = connector._to_account_info(raw)
+        assert info.account_id == ""
+        assert info.account_name == "No ID Account"
+        assert info.currency == "EUR"
+
+    def test_missing_currency(self):
+        """Missing currency defaults to EUR."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = {"accountId": "351012345671", "accountName": "No Currency Account"}
+        info = connector._to_account_info(raw)
+        assert info.account_id == "351012345671"
+        assert info.currency == "EUR"
+
+    def test_missing_iban(self):
+        """Missing IBAN defaults to empty string (no crash)."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = {
+            "accountId": "351012345671",
+            "currency": "EUR",
+            "accountName": "No IBAN Account",
+        }
+        info = connector._to_account_info(raw)
+        assert info.iban == ""
+        assert info.account_id == "351012345671"
+
+    def test_empty_account_dict(self):
+        """Completely empty account dict returns safe defaults."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw: dict[str, Any] = {}
+        info = connector._to_account_info(raw)
+        assert info.account_id == ""
+        assert info.account_name == ""
+        assert info.currency == "EUR"
+        assert info.iban == ""
+
+    def test_numeric_fields_as_strings(self):
+        """Numeric account data converted to strings correctly."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        raw = {
+            "accountId": 351012345671,
+            "currency": "EUR",
+            "accountName": "Numeric ID Account",
+        }
+        info = connector._to_account_info(raw)
+        assert info.account_id == "351012345671"
+        assert info.account_name == "Numeric ID Account"
+
 
 # =========================================================================
 # Subscription flow
@@ -848,6 +978,100 @@ class TestBocSubscriptionFlow:
             message = call_args[1].get("message", str(call_args))
             assert "Failed to store subscription ID" in message
 
+    # ------------------------------------------------------------------
+    # _load_subscription_id() edge cases
+    # ------------------------------------------------------------------
+
+    def test_load_subscription_id_malformed_metadata(self):
+        """Corrupt provider_metadata does not crash _load_subscription_id()."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+
+        with (
+            patch.object(
+                connector._oauth,
+                "_load_tokens",
+                return_value={
+                    "access_token": "test-token",
+                    "provider_metadata": "this is not valid json {{{",
+                },
+            ),
+        ):
+            # Should not raise, just set subscription_id to None.
+            connector._load_subscription_id()
+
+        assert connector._subscription_id is None
+
+    def test_load_subscription_id_missing_metadata_key(self):
+        """Missing subscription_id in metadata sets _subscription_id to None."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+
+        with (
+            patch.object(
+                connector._oauth,
+                "_load_tokens",
+                return_value={
+                    "access_token": "test-token",
+                    "provider_metadata": {
+                        "some_other_key": "value",
+                        # No "subscription_id" key
+                    },
+                },
+            ),
+        ):
+            connector._load_subscription_id()
+
+        assert connector._subscription_id is None
+
+    def test_load_subscription_id_no_connector_name(self):
+        """_load_subscription_id() sets None when connector_name is None."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = None
+
+        connector._load_subscription_id()
+
+        assert connector._subscription_id is None
+
+    def test_load_subscription_id_malformed_expiry_date(self):
+        """Malformed expiry date is tolerated (subscription_id still loaded)."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+
+        with (
+            patch.object(
+                connector._oauth,
+                "_load_tokens",
+                return_value={
+                    "access_token": "test-token",
+                    "provider_metadata": {
+                        "subscription_id": "Subid000001-1725429256148",
+                        "subscription_expires_at": "not-a-date",
+                    },
+                },
+            ),
+        ):
+            connector._load_subscription_id()
+
+        # Subscription ID loaded despite malformed expiry.
+        assert connector._subscription_id == "Subid000001-1725429256148"
+
+    def test_load_subscription_id_empty_token_data(self):
+        """_load_subscription_id() sets None when token_data is empty."""
+        connector = BankOfCyprusConnector(config=_make_boc_config())
+        connector._connector_name = "BoC-Test-001"
+
+        with (
+            patch.object(
+                connector._oauth,
+                "_load_tokens",
+                return_value=None,
+            ),
+        ):
+            connector._load_subscription_id()
+
+        assert connector._subscription_id is None
+
 
 # =========================================================================
 # OAuth flow (module-level functions)
@@ -958,6 +1182,139 @@ class TestBocOAuthFlow:
         ):
             result = oauth_callback(code=None)
             assert result is None or isinstance(result, dict)
+
+    # ------------------------------------------------------------------
+    # OAuth error paths
+    # ------------------------------------------------------------------
+
+    def test_oauth_callback_user_declined(self):
+        """oauth_callback() throws when user declines consent (error param)."""
+        mock_throw = MagicMock(side_effect=RuntimeError("User declined"))
+        with (
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.throw",
+                side_effect=mock_throw,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe._",
+                side_effect=lambda s: s,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="User declined"):
+                oauth_callback(code=None, error="access_denied")
+
+    def test_oauth_callback_code_exchange_fails(self):
+        """oauth_callback() propagates error when code exchange fails."""
+        mock_doc = MagicMock()
+        mock_doc.enabled = True
+        mock_doc.get_connector_config.return_value = _make_boc_config()
+        mock_doc.connector_name = "BoC-Test-001"
+
+        mock_cache = MagicMock()
+        mock_cache.get_value = MagicMock(return_value="Subid000001-1725429256148")
+
+        exchange_error = RuntimeError("OAuth handshake failed: invalid grant")
+
+        with (
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.get_doc",
+                return_value=mock_doc,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.cache",
+                return_value=mock_cache,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.log_error",
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe._",
+                side_effect=lambda s: s,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.get_all_enabled_connectors",
+                return_value=["BoC-Test-001"],
+            ),
+            patch(
+                "erpnext_bank_import.services.oauth.OAuth2Service.exchange_code_for_tokens",
+                side_effect=exchange_error,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="OAuth handshake failed"):
+                oauth_callback(code="test-auth-code")
+
+    def test_oauth_callback_activation_fails(self):
+        """oauth_callback() propagates error when subscription activation fails."""
+        mock_doc = MagicMock()
+        mock_doc.enabled = True
+        mock_doc.get_connector_config.return_value = _make_boc_config()
+        mock_doc.connector_name = "BoC-Test-001"
+
+        mock_cache = MagicMock()
+        mock_cache.get_value = MagicMock(return_value="Subid000001-1725429256148")
+
+        with (
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.get_doc",
+                return_value=mock_doc,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.cache",
+                return_value=mock_cache,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.log_error",
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe._",
+                side_effect=lambda s: s,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.get_all_enabled_connectors",
+                return_value=["BoC-Test-001"],
+            ),
+            patch(
+                "erpnext_bank_import.services.oauth.OAuth2Service.exchange_code_for_tokens",
+                return_value=None,
+            ),
+            patch(
+                "erpnext_bank_import.services.oauth.OAuth2Service.get_valid_access_token",
+                return_value="user-token-xyz",
+            ),
+            patch(
+                "erpnext_bank_import.services.boc_subscription.BocSubscriptionService.get_subscription_details",
+                return_value=MOCK_BOC_SUBSCRIPTION_DETAILS,
+            ),
+            patch(
+                "erpnext_bank_import.services.boc_subscription.BocSubscriptionService.activate_subscription",
+                side_effect=ApiError("Activation failed: 500"),
+            ),
+        ):
+            with pytest.raises(ApiError, match="Activation failed"):
+                oauth_callback(code="test-auth-code")
+
+    def test_oauth_callback_no_enabled_connectors(self):
+        """oauth_callback() throws when no enabled BoC connectors exist."""
+        mock_throw = MagicMock(side_effect=RuntimeError("No pending authorisation"))
+        with (
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.throw",
+                side_effect=mock_throw,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe._",
+                side_effect=lambda s: s,
+            ),
+            patch(
+                "erpnext_bank_import.connectors.bank_of_cyprus.frappe.log_error",
+            ),
+            patch(
+                "erpnext_bank_import.connectors.get_all_enabled_connectors",
+                return_value=[],
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="No pending authorisation"):
+                oauth_callback(code="test-auth-code")
 
 
 # =========================================================================

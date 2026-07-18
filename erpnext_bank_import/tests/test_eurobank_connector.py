@@ -28,6 +28,7 @@ from erpnext_bank_import.connectors.exceptions import (
 	AuthenticationError,
 	ConfigurationError,
 	NetworkError,
+	NormalizationError,
 	RateLimitError,
 	ServerError,
 )
@@ -41,6 +42,11 @@ from erpnext_bank_import.tests.fixtures.eurobank_fixtures import (
 	MOCK_TOKEN_ERROR_INVALID_CLIENT,
 	MOCK_TOKEN_ERROR_INVALID_CODE,
 	MOCK_TOKEN_RESPONSE,
+	MOCK_TRANSACTIONS_EMPTY,
+	MOCK_TRANSACTIONS_MULTI_PAGE,
+	MOCK_TRANSACTIONS_RESPONSE,
+	MOCK_TRANSACTIONS_RESPONSE_PAGE_2,
+	MOCK_TRANSACTIONS_WITH_PENDING,
 )
 
 # ---------------------------------------------------------------------------
@@ -314,24 +320,8 @@ class TestEurobankErrorHandling:
 # ---------------------------------------------------------------------------
 
 
-class TestEurobankNotImplemented:
-	"""Tests for methods that are not yet implemented."""
 
-	def test_fetch_transactions_not_implemented(self) -> None:
-		"""fetch_transactions should raise NotImplementedError."""
-		conn = _make_connector()
-		with pytest.raises(NotImplementedError, match="not yet implemented"):
-			conn.fetch_transactions(
-				account_id="0990145684237",
-				date_from="2026-01-01",
-				date_to="2026-06-30",
-			)
 
-	def test_normalize_transaction_not_implemented(self) -> None:
-		"""normalize_transaction should raise NotImplementedError."""
-		conn = _make_connector()
-		with pytest.raises(NotImplementedError, match="not yet implemented"):
-			conn.normalize_transaction({})
 
 
 # ---------------------------------------------------------------------------
@@ -528,3 +518,297 @@ class TestEurobankAuthLifecycle:
 		"""refresh_token should not raise."""
 		conn = _make_connector()
 		conn.refresh_token()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Transaction fetch
+# ---------------------------------------------------------------------------
+
+
+class TestEurobankTransactionFetch:
+	"""Transaction fetching tests."""
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_returns_correct_count(self, mock_api_get: MagicMock) -> None:
+		"""fetch_transactions should return all completed transactions."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_RESPONSE
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, next_token = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+
+		assert len(txns) == 4
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_skips_pending(self, mock_api_get: MagicMock) -> None:
+		"""Pending transactions should be filtered out."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_WITH_PENDING
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, next_token = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+
+		assert len(txns) == 1
+		assert txns[0]["external_id"] == "txn-completed-001"
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_empty_list(self, mock_api_get: MagicMock) -> None:
+		"""Empty transaction list should return empty list."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_EMPTY
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, next_token = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+
+		assert len(txns) == 0
+		assert next_token is None
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_with_pagination(self, mock_api_get: MagicMock) -> None:
+		"""When nextPage is present, next_token should be the next page number."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_MULTI_PAGE
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, next_token = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+
+		assert len(txns) == 100
+		# nextPage URL was present, so next_token should be page 1.
+		assert next_token == "1"
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_second_page(self, mock_api_get: MagicMock) -> None:
+		"""Passing a page_token should request the correct page."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_RESPONSE_PAGE_2
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, next_token = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+			page_token="1",
+		)
+
+		assert len(txns) == 1
+		assert txns[0]["external_id"] == "e1f2g3h4i5j6"
+		assert next_token is None  # page 2 has no nextPage URL
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_debit_amount_negative(self, mock_api_get: MagicMock) -> None:
+		"""Debit transactions should have negative amounts."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_RESPONSE
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, _ = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+
+		# First transaction is DEBIT for 72000.00
+		assert txns[0]["amount"] == -72000.00
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_credit_amount_positive(self, mock_api_get: MagicMock) -> None:
+		"""Credit transactions should have positive amounts."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_RESPONSE
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, _ = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+
+		# Fourth transaction is CREDIT for 25000.00
+		assert txns[3]["amount"] == 25000.00
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_passes_correct_params(self, mock_api_get: MagicMock) -> None:
+		"""Verify that the correct date format and params are sent."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_EMPTY
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+
+		# Verify the API was called with the correct endpoint and params.
+		expected_path = "/v2/b2b/accounts/0990145684237/transactions"
+		args, kwargs = mock_api_get.call_args
+		assert args[0] == expected_path
+		params = kwargs.get("params", {})
+		assert params["dateFrom"] == "202601010000"
+		assert params["dateTo"] == "202601312359"
+		assert params["bookingStatus"] == "booked"
+		assert params["limit"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Transaction normalisation
+# ---------------------------------------------------------------------------
+
+
+class TestEurobankTransactionNormalisation:
+	"""Transaction normalisation tests."""
+
+	def test_normalize_debit(self) -> None:
+		"""DEBIT transaction should have negative amount."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-001"},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "DEBIT",
+			"transactionAmount": {"currency": "EUR", "amount": 150.00},
+			"description": "Test debit",
+			"type": "TRANSFER",
+			"counterParty": {"name": "Vendor Ltd", "accountNumber": "ACC-123"},
+			"status": "COMPLETED",
+		}
+		txn = conn.normalize_transaction(raw)
+		assert txn["external_id"] == "ref-001"
+		assert txn["date"] == "2026-01-15"
+		assert txn["amount"] == -150.00
+		assert txn["currency"] == "EUR"
+		assert txn["description"] == "Test debit"
+		assert txn["transaction_type"] == "TRANSFER"
+		assert txn["bank_party_name"] == "Vendor Ltd"
+		assert txn["bank_party_account_number"] == "ACC-123"
+
+	def test_normalize_credit(self) -> None:
+		"""CREDIT transaction should have positive amount."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-002"},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "USD", "amount": 5000.00},
+			"description": "Salary deposit",
+			"type": "TRANSFER",
+			"counterParty": {"name": "Employer Inc"},
+			"status": "COMPLETED",
+		}
+		txn = conn.normalize_transaction(raw)
+		assert txn["amount"] == 5000.00
+		assert txn["currency"] == "USD"
+
+	def test_normalize_missing_reference_id(self) -> None:
+		"""Missing referenceId should raise NormalizationError."""
+		conn = _make_connector()
+		raw = {
+			"references": {},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 100.00},
+			"description": "Test",
+		}
+		with pytest.raises(NormalizationError, match="referenceId"):
+			conn.normalize_transaction(raw)
+
+	def test_normalize_missing_amount(self) -> None:
+		"""Missing amount should raise NormalizationError."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-003"},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR"},
+			"description": "Test",
+		}
+		with pytest.raises(NormalizationError, match="amount"):
+			conn.normalize_transaction(raw)
+
+	def test_normalize_missing_currency(self) -> None:
+		"""Missing currency should raise NormalizationError."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-004"},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"amount": 100.00},
+			"description": "Test",
+		}
+		with pytest.raises(NormalizationError, match="currency"):
+			conn.normalize_transaction(raw)
+
+	def test_normalize_missing_booking_date(self) -> None:
+		"""Missing bookingDate should raise NormalizationError."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-005"},
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 100.00},
+			"description": "Test",
+		}
+		with pytest.raises(NormalizationError, match="bookingDate"):
+			conn.normalize_transaction(raw)
+
+	def test_normalize_without_counterparty(self) -> None:
+		"""Missing counterparty should not raise — fields should be None."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-006"},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 100.00},
+			"description": "No counterparty",
+			"type": "TRANSFER",
+		}
+		txn = conn.normalize_transaction(raw)
+		assert txn["bank_party_name"] is None
+		assert txn["bank_party_account_number"] is None
+
+	def test_normalize_with_reference_number(self) -> None:
+		"""paymentOrderId should be used as reference_number."""
+		conn = _make_connector()
+		raw = {
+			"references": {
+				"referenceId": "ref-007",
+				"paymentOrderId": "PO-12345",
+			},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 100.00},
+			"description": "With ref",
+			"type": "TRANSFER",
+		}
+		txn = conn.normalize_transaction(raw)
+		assert txn["reference_number"] == "PO-12345"
+
+
+# ---------------------------------------------------------------------------
+# Date format helper
+# ---------------------------------------------------------------------------
+
+
+class TestEurobankDateFormat:
+	"""Date format conversion tests."""
+
+	def test_date_to_eurobank_format_start(self) -> None:
+		"""YYYY-MM-DD should convert to yyyyMMdd0000."""
+		result = EurobankConnector._date_to_eurobank_format("2026-01-01")
+		assert result == "202601010000"
+
+	def test_date_to_eurobank_format_end(self) -> None:
+		"""YYYY-MM-DD should convert to yyyyMMdd2359 at end of day."""
+		result = EurobankConnector._date_to_eurobank_format("2026-12-31", end_of_day=True)
+		assert result == "202612312359"
+
+	def test_date_to_eurobank_format_no_dashes(self) -> None:
+		"""Date without dashes should still work."""
+		result = EurobankConnector._date_to_eurobank_format("20260615")
+		assert result == "202606150000"

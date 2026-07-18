@@ -55,6 +55,7 @@ from erpnext_bank_import.connectors.exceptions import (
 	AuthenticationError,
 	ConfigurationError,
 	NetworkError,
+	NormalizationError,
 	RateLimitError,
 	ServerError,
 )
@@ -208,8 +209,29 @@ class EurobankConnector(BankConnector):
 		return accounts
 
 	# ------------------------------------------------------------------
-	# Transaction fetch (not yet implemented)
+	# Transaction fetch
 	# ------------------------------------------------------------------
+
+	# Transactions in these states are considered final and will be
+	# imported.  Pending and rejected transactions are skipped because
+	# they may change or may never settle.
+	_FINAL_STATES: frozenset[str] = frozenset({"COMPLETED"})
+
+	@staticmethod
+	def _date_to_eurobank_format(date_str: str, end_of_day: bool = False) -> str:
+		"""Convert ``YYYY-MM-DD`` to Eurobank's ``yyyyMMddHHmm`` format.
+
+		Args:
+		    date_str: Date in ``YYYY-MM-DD`` format.
+		    end_of_day: If ``True``, uses ``2359`` as the time portion.
+
+		Returns:
+		    Date string formatted as ``yyyyMMddHHmm``.
+		"""
+		cleaned = date_str.replace("-", "")
+		if end_of_day:
+			return f"{cleaned}2359"
+		return f"{cleaned}0000"
 
 	def fetch_transactions(
 		self,
@@ -220,32 +242,163 @@ class EurobankConnector(BankConnector):
 		page_size: int = 100,
 		page_token: str | None = None,
 	) -> tuple[list[NormalizedTransaction], str | None]:
-		"""Transaction fetching is not yet implemented for Eurobank.
+		"""Fetch a single page of transactions from ``GET /v2/b2b/accounts/{accountID}/transactions``.
+
+		Eurobank uses page number-based pagination. The ``page_token``
+		is the page number (0-based, as a string). ``None`` means the
+		first page.
+
+		Args:
+		    account_id: The Eurobank account number (from ``get_accounts()``).
+		    date_from: Start date in ``YYYY-MM-DD`` format.
+		    date_to: End date in ``YYYY-MM-DD`` format.
+		    page_size: Max transactions per page (Eurobank max is 100).
+		    page_token: Page number as string, or ``None`` for the first page.
+
+		Returns:
+		    A tuple ``(transactions, next_page_token)``.
 
 		Raises:
-		    NotImplementedError: Always — this will be implemented in a
-		        follow-up PR.
+		    AuthenticationError: If the API returns 401.
+		    RateLimitError: If the API returns 429.
+		    ApiError: For other non-2xx responses.
 		"""
-		raise NotImplementedError(
-			"Transaction fetching for Eurobank is not yet implemented. "
-			"Use the auth + account discovery flow to obtain consent, then "
-			"the GET /v2/b2b/accounts/{accountID}/transactions endpoint "
-			"in a future update."
-		)
+		# Build query parameters in Eurobank's yyyyMMddHHmm format.
+		params: dict[str, str | int] = {
+			"dateFrom": self._date_to_eurobank_format(date_from),
+			"dateTo": self._date_to_eurobank_format(date_to, end_of_day=True),
+			"bookingStatus": "booked",
+			"limit": min(page_size, 100),
+		}
+
+		if page_token is not None:
+			# Page number pagination (0-based).
+			params["page"] = int(page_token)
+
+		data = self._api_get(f"/v2/b2b/accounts/{account_id}/transactions", params=params)
+
+		# The response wraps transactions in payload.transactions[].
+		payload = data.get("payload") or {}
+		raw_txns = payload.get("transactions") or []
+		pagination = payload.get("pagination") or {}
+
+		txns: list[NormalizedTransaction] = []
+		for raw in raw_txns:
+			# Skip non-final states (pending, rejected).
+			txn_status = raw.get("status", "").upper()
+			if txn_status not in self._FINAL_STATES:
+				continue
+
+			try:
+				txns.append(self.normalize_transaction(raw))
+			except NormalizationError:
+				frappe.log_error(
+					message=f"Eurobank transaction normalization failed for {raw.get('references', {}).get('referenceId', 'unknown')}: {raw}",
+					title="Eurobank normalisation error",
+				)
+				continue
+
+		# Determine next page token: use the nextPage URL from pagination,
+		# or increment the current page.
+		next_token: str | None = None
+		next_page_url = pagination.get("nextPage")
+		if next_page_url is not None:
+			# There's a next page URL — increment page number.
+			current_page = int(pagination.get("currentPage", 0))
+			next_token = str(current_page + 1)
+		elif len(raw_txns) >= min(page_size, 100):
+			# No nextPage URL but page is full — assume there are more.
+			current_page = pagination.get("currentPage", 0)
+			if current_page is not None:
+				next_token = str(int(current_page) + 1)
+
+		return txns, next_token
 
 	# ------------------------------------------------------------------
-	# Normalisation (not yet implemented)
+	# Normalisation
 	# ------------------------------------------------------------------
 
 	def normalize_transaction(self, raw: dict[str, Any]) -> NormalizedTransaction:
-		"""Transaction normalisation is not yet implemented for Eurobank.
+		"""Convert a raw Eurobank transaction dict into the canonical form.
+
+		Args:
+		    raw: Raw transaction dict from the Eurobank API
+		        (a ``TransactionDetailsObject``).
+
+		Returns:
+		    A ``NormalizedTransaction`` dict.
 
 		Raises:
-		    NotImplementedError: Always — this will be implemented in a
-		        follow-up PR.
+		    NormalizationError: If required fields are missing.
 		"""
-		raise NotImplementedError(
-			"Transaction normalisation for Eurobank is not yet implemented."
+		references = raw.get("references") or {}
+		txn_id = references.get("referenceId")
+		if not txn_id:
+			raise NormalizationError("Missing required field: references.referenceId")
+
+		description = raw.get("description") or ""
+
+		# Parse the date from bookingDate (Eurobank format: dd/MM/yyyy).
+		booking_date = raw.get("bookingDate") or ""
+		if booking_date:
+			try:
+				parts = booking_date.split("/")
+				date = f"{parts[2]}-{parts[1]}-{parts[0]}"
+			except (IndexError, ValueError):
+				date = str(booking_date)[:10]
+		else:
+			date = ""
+			raise NormalizationError("Missing required field: bookingDate")
+
+		# Parse amount and determine sign from creditDebitIndicator.
+		txn_amount = raw.get("transactionAmount") or {}
+		amount_raw = txn_amount.get("amount")
+		if amount_raw is None:
+			raise NormalizationError("Missing required field: transactionAmount.amount")
+		amount = float(amount_raw)
+		credit_debit = raw.get("creditDebitIndicator", "").upper()
+		if credit_debit == "DEBIT":
+			amount = -abs(amount)
+
+		currency = txn_amount.get("currency") or ""
+		if not currency:
+			raise NormalizationError("Missing required field: transactionAmount.currency")
+
+		# Extract counterparty info.
+		counterparty = raw.get("counterParty") or {}
+
+		return NormalizedTransaction(
+			external_id=str(txn_id),
+			date=date,
+			amount=amount,
+			currency=str(currency),
+			description=str(description),
+			reference_number=str(references.get("paymentOrderId"))
+			if references.get("paymentOrderId")
+			else str(references.get("otherId"))
+			if references.get("otherId")
+			else None,
+			bank_party_name=str(counterparty.get("name"))
+			if counterparty.get("name")
+			else None,
+			bank_party_account_number=str(counterparty.get("accountNumber"))
+			if counterparty.get("accountNumber")
+			else None,
+			bank_party_iban=None,  # IBAN not available at transaction level
+			transaction_type=str(raw.get("type", "")),
+			included_fee=None,  # Not reported at transaction level
+			excluded_fee=None,
+			provider_metadata={
+				"references": references,
+				"submissionDate": raw.get("submissionDate"),
+				"submissionTime": raw.get("submissionTime"),
+				"valueDate": raw.get("valueDate"),
+				"creditDebitIndicator": raw.get("creditDebitIndicator"),
+				"balanceAfterTransaction": raw.get("balanceAfterTransaction"),
+				"status": raw.get("status"),
+				"detailsOfPayment": raw.get("detailsOfPayment"),
+				"type": raw.get("type"),
+			},
 		)
 
 	# ------------------------------------------------------------------

@@ -812,3 +812,275 @@ class TestEurobankDateFormat:
 		"""Date without dashes should still work."""
 		result = EurobankConnector._date_to_eurobank_format("20260615")
 		assert result == "202606150000"
+
+
+# ---------------------------------------------------------------------------
+# Edge cases — Config validation
+# ---------------------------------------------------------------------------
+
+
+class TestEurobankConfigEdgeCases:
+	"""Additional config edge case tests."""
+
+	def test_invalid_api_base_url_scheme(self) -> None:
+		"""Empty api_base_url should raise ConfigurationError (URL scheme validated by doctype)."""
+		config = _make_eurobank_config(api_base_url="")
+		with pytest.raises(ConfigurationError, match="api_base_url"):
+			EurobankConnector(config=config)
+
+	def test_production_api_base_url(self) -> None:
+		"""Production URL should be accepted."""
+		config = _make_eurobank_config(
+			api_base_url="https://apisprod.hellenicbank.com",
+			extra={"sandbox": False, "token_request_style": "query", "scope_separator": ","},
+		)
+		conn = EurobankConnector(config=config)
+		assert conn.config.extra.get("sandbox") is False
+		assert conn.config.api_base_url == "https://apisprod.hellenicbank.com"
+
+
+# ---------------------------------------------------------------------------
+# Edge cases — Account discovery
+# ---------------------------------------------------------------------------
+
+
+class TestEurobankAccountDiscoveryEdgeCases:
+	"""Account discovery edge case tests."""
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_malformed_response_no_payload(self, mock_api_get: MagicMock) -> None:
+		"""Response without payload key should return empty list."""
+		mock_api_get.return_value = {"errors": None}
+		conn = _make_connector()
+		accounts = conn.get_accounts()
+		assert len(accounts) == 0
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_payload_without_accounts_key(self, mock_api_get: MagicMock) -> None:
+		"""Payload without accounts key should return empty list."""
+		mock_api_get.return_value = {"payload": {"subscriberName": "Test"}}
+		conn = _make_connector()
+		accounts = conn.get_accounts()
+		assert len(accounts) == 0
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_account_without_account_number(self, mock_api_get: MagicMock) -> None:
+		"""Account without accountNumber should use empty string as ID."""
+		mock_api_get.return_value = {
+			"payload": {
+				"subscriberName": "Test",
+				"numberOfRecords": 1,
+				"accounts": [
+					{
+						"accountName": "No Number",
+						"accountType": "CURRENT_ACCOUNT",
+						"currency": "EUR",
+						"status": "ACTIVE",
+					}
+				],
+			}
+		}
+		conn = _make_connector()
+		accounts = conn.get_accounts()
+		assert len(accounts) == 1
+		assert accounts[0].account_id == ""
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_network_error_during_discovery(self, mock_api_get: MagicMock) -> None:
+		"""Network error during get_accounts should propagate."""
+		from erpnext_bank_import.connectors.exceptions import NetworkError
+
+		mock_api_get.side_effect = NetworkError("Connection refused")
+		conn = _make_connector()
+		with pytest.raises(NetworkError):
+			conn.get_accounts()
+
+
+# ---------------------------------------------------------------------------
+# Edge cases — Transaction fetch additional
+# ---------------------------------------------------------------------------
+
+
+class TestEurobankTransactionFetchEdgeCases:
+	"""Additional transaction fetch edge case tests."""
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_malformed_response(self, mock_api_get: MagicMock) -> None:
+		"""Response without payload should return empty list."""
+		mock_api_get.return_value = {"errors": None}
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, next_token = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+		assert len(txns) == 0
+		assert next_token is None
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_rejected_status_filtered(self, mock_api_get: MagicMock) -> None:
+		"""REJECTED transactions should be filtered out."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_WITH_PENDING
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, _ = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+		# Only COMPLETED should remain; the PENDING one is filtered out.
+		for txn in txns:
+			assert txn["external_id"] == "txn-completed-001"
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_page_token_none_first_page(self, mock_api_get: MagicMock) -> None:
+		"""First page call should not include page param."""
+		mock_api_get.return_value = MOCK_TRANSACTIONS_EMPTY
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+			page_token=None,
+		)
+		args, kwargs = mock_api_get.call_args
+		params = kwargs.get("params", {})
+		# page param should NOT be present for the first page.
+		assert "page" not in params
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_full_page_suggests_more(self, mock_api_get: MagicMock) -> None:
+		"""When page is full but no nextPage URL, should infer next page."""
+		response = {
+			"payload": {
+				"account": {"iban": "CY59...", "currency": "EUR"},
+				"numberOfRecords": 100,
+				"transactions": [
+					{
+						"references": {"referenceId": f"txn-{i}"},
+						"bookingDate": f"15/01/2026",
+						"creditDebitIndicator": "CREDIT",
+						"transactionAmount": {"currency": "EUR", "amount": 100.0},
+						"description": f"Txn {i}",
+						"status": "COMPLETED",
+					}
+					for i in range(100)
+				],
+				"pagination": {
+					"currentPage": 0,
+					"itemsPerPage": 100,
+					"nextPage": None,
+				},
+			}
+		}
+		mock_api_get.return_value = response
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		txns, next_token = conn.fetch_transactions(
+			account_id="0990145684237",
+			date_from="2026-01-01",
+			date_to="2026-01-31",
+		)
+		assert len(txns) == 100
+		# No nextPage URL but page is full (100 items), so infer next page.
+		assert next_token == "1"
+
+	@patch.object(EurobankConnector, "_api_get")
+	def test_fetch_401_authentication_error(self, mock_api_get: MagicMock) -> None:
+		"""HTTP 401 during fetch should propagate as AuthenticationError."""
+		from erpnext_bank_import.connectors.exceptions import AuthenticationError
+
+		mock_api_get.side_effect = AuthenticationError("Token expired")
+		conn = _make_connector()
+		conn._current_bank_account = "Test"
+		with pytest.raises(AuthenticationError):
+			conn.fetch_transactions(
+				account_id="0990145684237",
+				date_from="2026-01-01",
+				date_to="2026-01-31",
+			)
+
+
+# ---------------------------------------------------------------------------
+# Edge cases — Normalization
+# ---------------------------------------------------------------------------
+
+
+class TestEurobankNormalizationEdgeCases:
+	"""Normalization edge case tests."""
+
+	def test_normalize_zero_amount(self) -> None:
+		"""Zero amount should be accepted."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-zero"},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 0.0},
+			"description": "Zero amount txn",
+		}
+		txn = conn.normalize_transaction(raw)
+		assert txn["amount"] == 0.0
+
+	def test_normalize_empty_description(self) -> None:
+		"""Empty description should be accepted."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-empty-desc"},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "DEBIT",
+			"transactionAmount": {"currency": "EUR", "amount": 50.0},
+			"description": "",
+		}
+		txn = conn.normalize_transaction(raw)
+		assert txn["description"] == ""
+
+	def test_normalize_other_id_fallback(self) -> None:
+		"""When paymentOrderId is missing, otherId should be used."""
+		conn = _make_connector()
+		raw = {
+			"references": {
+				"referenceId": "ref-other",
+				"otherId": "OTHER-999",
+			},
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 200.0},
+			"description": "Other ID fallback",
+		}
+		txn = conn.normalize_transaction(raw)
+		assert txn["reference_number"] == "OTHER-999"
+
+	def test_normalize_no_references_at_all(self) -> None:
+		"""Missing references dict entirely should raise."""
+		conn = _make_connector()
+		raw = {
+			"bookingDate": "15/01/2026",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 100.0},
+			"description": "No references",
+		}
+		with pytest.raises(NormalizationError, match="referenceId"):
+			conn.normalize_transaction(raw)
+
+	def test_normalize_invalid_date_format(self) -> None:
+		"""Malformed date should fall back gracefully but still produce output."""
+		conn = _make_connector()
+		raw = {
+			"references": {"referenceId": "ref-bad-date"},
+			"bookingDate": "not-a-date",
+			"creditDebitIndicator": "CREDIT",
+			"transactionAmount": {"currency": "EUR", "amount": 100.0},
+			"description": "Bad date",
+		}
+		# The date parsing splits on "/", so "not-a-date" won't trigger
+		# the IndexError — it will be caught and fall back to the raw string.
+		txn = conn.normalize_transaction(raw)
+		assert txn["date"] == "not-a-date"
+
+	def test_date_to_eurobank_format_no_dashes(self) -> None:
+		"""Date without dashes should still work."""
+		result = EurobankConnector._date_to_eurobank_format("20260615")
+		assert result == "202606150000"

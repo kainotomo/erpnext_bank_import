@@ -14,8 +14,8 @@ from typing import Any
 
 MOCK_TOKEN_RESPONSE: dict[str, Any] = {
 	"token_type": "Bearer",
-	"access_token": "6e3f5528-3bd2-4459-89a4-4830878f63a8",
-	"client_id": "1b7b4fe5290f44528bd2e97fbcc22660",
+	"access_token": "mock-access-token-00000000-0000-0000-0000-000000000000",
+	"client_id": "mock-client-id-000000000000000000000000",
 	"scope": [
 		"v2.b2b.get.accounts",
 		"v2.b2b.get.account.details",
@@ -23,7 +23,7 @@ MOCK_TOKEN_RESPONSE: dict[str, Any] = {
 	],
 	"created_on": 1768294396503,
 	"expires_at": 1768296208785,
-	"refresh_token": "f6a1df97-ed65-41ad-a971-dd3ae4a38c9e",
+	"refresh_token": "mock-refresh-token-00000000-0000-0000-0000-000000000000",
 	"refresh_expires_at": 1783846396503,
 }
 

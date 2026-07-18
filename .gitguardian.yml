@@ -6,3 +6,5 @@ secret:
     - erpnext_bank_import/tests/test_oauth_service.py
     - erpnext_bank_import/tests/test_revolut_connector.py
     - erpnext_bank_import/tests/test_revolut_import.py
+    - erpnext_bank_import/tests/test_eurobank_connector.py
+    - erpnext_bank_import/tests/fixtures/eurobank_fixtures.py

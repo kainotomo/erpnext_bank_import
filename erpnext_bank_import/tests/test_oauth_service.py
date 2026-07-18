@@ -688,7 +688,7 @@ class TestOAuth2ServiceTokenRefreshEdgeCases:
 
 		mock_post.side_effect = requests.ConnectionError("Connection refused")
 
-		with pytest.raises(OAuthHandshakeError, match="Token request failed"):
+		with pytest.raises(OAuthHandshakeError, match="Token refresh request failed"):
 			service.refresh_access_token(bank_account="BA-001")
 
 	def test_refresh_without_any_stored_data(self) -> None:

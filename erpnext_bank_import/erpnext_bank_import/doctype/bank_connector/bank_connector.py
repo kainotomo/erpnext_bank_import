@@ -26,7 +26,7 @@ class BankConnector(Document):
 	# begin: auto-generated types
 	# This code is auto-generated. Do not modify anything in this block.
 
-	from typing import TYPE_CHECKING
+	from typing import TYPE_CHECKING, Any
 
 	if TYPE_CHECKING:
 		from frappe.types import DF
@@ -46,7 +46,7 @@ class BankConnector(Document):
 		enabled: DF.Check
 		jwt_issuer: DF.Data | None
 		jwt_private_key: DF.Code | None
-		provider_name: DF.Literal["revolut", "mock"]
+		provider_name: DF.Literal["revolut", "mock", "eurobank"]
 		rate_limit_rps: DF.Float | None
 		redirect_uri: DF.Data | None
 		revoke_url: DF.Data | None
@@ -103,7 +103,21 @@ class BankConnector(Document):
 		"""
 		scopes_list: list[str] = []
 		if self.scopes:
-			scopes_list = [s.strip() for s in self.scopes.split() if s.strip()]
+			scopes_list = [s.strip() for s in self.scopes.replace(",", " ").split() if s.strip()]
+
+		# Build provider-specific extra config.
+		extra: dict[str, Any] = {"sandbox": bool(self.sandbox)}
+
+		if self.provider_name == "eurobank":
+			# Eurobank sends OAuth2 token params as URL query params
+			# with HTTP Basic Auth instead of POST body.
+			extra["token_request_style"] = "query"
+			extra["scope_separator"] = ","
+			# Eurobank uses a different URL for token refresh than code exchange.
+			if self.sandbox:
+				extra["refresh_token_url"] = "https://sandbox-oauth.hellenicbank.com/v2/token"
+			else:
+				extra["refresh_token_url"] = "https://oauthprod.hellenicbank.com/v2/token"
 
 		return ConnectorConfig(
 			provider_name=self.provider_name,
@@ -121,7 +135,7 @@ class BankConnector(Document):
 			token_safety_buffer_seconds=self.token_safety_buffer_seconds or 60,
 			jwt_private_key=self.jwt_private_key,
 			jwt_issuer=self._none_if_blank(self.jwt_issuer),
-			extra={"sandbox": bool(self.sandbox)},
+			extra=extra,
 		)
 
 	@staticmethod
@@ -342,12 +356,17 @@ def _fetch_accounts_for_doc(doc: "BankConnector") -> None:
 		if hasattr(connector, "set_current_bank_account"):
 			connector.set_current_bank_account(doc.connector_name)
 		accounts = connector.get_accounts()
-	except AuthenticationError:
+	except AuthenticationError as e:
+		frappe.log_error(
+			message=f"Eurobank fetch accounts failed for {doc.connector_name}: {e}",
+			title="Eurobank authentication error",
+		)
 		frappe.throw(
 			frappe._(
-				"Authentication failed. Please complete the OAuth2 flow "
-				"first using the consent URL from start_oauth_flow."
-			)
+				"Authentication failed: {0}\n\n"
+				"Make sure you have completed the OAuth2 consent flow "
+				"and the connector is correctly configured."
+			).format(str(e))
 		)
 	except Exception as e:
 		frappe.throw(frappe._("Failed to fetch accounts: {0}").format(e))

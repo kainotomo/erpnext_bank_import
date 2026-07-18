@@ -41,10 +41,11 @@ Usage
 
 from __future__ import annotations
 
+import base64
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode, urljoin
 
 import frappe
@@ -112,6 +113,15 @@ class OAuthProviderConfig:
 	revoke_url: str | None = None
 	"""Full OAuth2 token revocation endpoint URL."""
 
+	refresh_token_url: str | None = None
+	"""Full OAuth2 token refresh endpoint URL.
+
+    Some providers (e.g. Eurobank) use a different URL for token
+    refresh than for the initial code exchange.  When set, this
+    overrides the ``token_url`` for refresh requests.
+    Falls back to ``token_url`` if not set.
+    """
+
 	scopes: list[str] = field(default_factory=list)
 	"""OAuth2 scopes requested during authorization."""
 
@@ -133,6 +143,20 @@ class OAuthProviderConfig:
 	"""Value of the ``iss`` claim in the JWT client assertion.
 
     Defaults to ``client_id`` if not set.
+    """
+
+	token_request_style: Literal["form", "query"] = "form"
+	"""How to send parameters in token requests.
+
+    ``"form"`` (default): Parameters are sent as POST body (form-encoded).
+    ``"query"``: Parameters are sent as URL query string with HTTP Basic Auth.
+    """
+
+	scope_separator: str = " "
+	"""Separator used between scopes in the authorization URL.
+
+    ``" "`` (space) for standard OAuth2 (e.g. Revolut).
+    ``","`` (comma) for providers like Eurobank.
     """
 
 	@classmethod
@@ -165,17 +189,24 @@ class OAuthProviderConfig:
 		if revoke_url and not revoke_url.startswith("http"):
 			revoke_url = urljoin(config.api_base_url.rstrip("/") + "/", revoke_url.lstrip("/"))
 
+		refresh_token_url = config.extra.get("refresh_token_url")
+		if refresh_token_url and not refresh_token_url.startswith("http"):
+			refresh_token_url = urljoin(config.api_base_url.rstrip("/") + "/", refresh_token_url.lstrip("/"))
+
 		return cls(
 			authorize_url=authorize_url,
 			token_url=token_url,
 			client_id=config.client_id,
 			client_secret=config.client_secret,
 			revoke_url=revoke_url,
+			refresh_token_url=refresh_token_url or token_url,
 			scopes=config.scopes,
 			redirect_uri=config.redirect_uri,
 			token_safety_buffer_seconds=config.token_safety_buffer_seconds,
 			jwt_private_key=config.jwt_private_key,
 			jwt_issuer=config.jwt_issuer,
+			token_request_style=config.extra.get("token_request_style", "form"),
+			scope_separator=config.extra.get("scope_separator", " "),
 		)
 
 
@@ -222,7 +253,7 @@ class OAuth2Service:
 			"state": state,
 		}
 		if self._provider_config.scopes:
-			params["scope"] = " ".join(self._provider_config.scopes)
+			params["scope"] = self._provider_config.scope_separator.join(self._provider_config.scopes)
 		if self._provider_config.redirect_uri:
 			params["redirect_uri"] = self._provider_config.redirect_uri
 
@@ -249,13 +280,7 @@ class OAuth2Service:
 		Raises:
 		    OAuthHandshakeError: If the bank API rejects the code.
 		"""
-		data: dict[str, str | None] = {
-			"grant_type": "authorization_code",
-			"code": code,
-			"client_id": self._provider_config.client_id,
-			"client_secret": self._provider_config.client_secret or "",
-			"redirect_uri": self._provider_config.redirect_uri or "",
-		}
+		data = self._build_code_exchange_data(code)
 		response_data = self._token_request(data)
 		token = self._parse_token_response(response_data)
 		self._persist_tokens(bank_account, token)
@@ -343,14 +368,8 @@ class OAuth2Service:
 				f"bank account '{bank_account}'."
 			)
 
-		data: dict[str, str | None] = {
-			"grant_type": "refresh_token",
-			"refresh_token": token_data["refresh_token"],
-			"client_id": self._provider_config.client_id,
-			"client_secret": self._provider_config.client_secret or "",
-		}
-
-		response_data = self._token_request(data)
+		data = self._build_refresh_data(token_data["refresh_token"])
+		response_data = self._refresh_token_request(data)
 		token = self._parse_token_response(response_data)
 		self._persist_tokens(bank_account, token)
 		return token
@@ -454,12 +473,138 @@ class OAuth2Service:
 
 		return jwt.encode(payload, key=cfg.jwt_private_key, algorithm="RS256")
 
+	def _build_code_exchange_data(self, code: str) -> dict[str, str | None]:
+		"""Build the request data for authorization code exchange.
+
+		For ``"form"`` style (default): includes ``client_id`` and
+		``client_secret`` in the data dict.
+		For ``"query"`` style: omits ``client_id`` and ``client_secret``
+		(they are sent as HTTP Basic Auth header instead).
+
+		Args:
+		    code: The authorization code received from the OAuth2 callback.
+
+		Returns:
+		    A dict of parameters to pass to ``_token_request()``.
+		"""
+		data: dict[str, str | None] = {
+			"grant_type": "authorization_code",
+			"code": code,
+			"redirect_uri": self._provider_config.redirect_uri or "",
+		}
+		if self._provider_config.token_request_style == "form":
+			data["client_id"] = self._provider_config.client_id
+			data["client_secret"] = self._provider_config.client_secret or ""
+		return data
+
+	def _build_refresh_data(self, refresh_token: str) -> dict[str, str | None]:
+		"""Build the request data for token refresh.
+
+		For ``"form"`` style (default): includes ``client_id`` and
+		``client_secret`` in the data dict.
+		For ``"query"`` style: omits ``client_id`` and ``client_secret``
+		(they are sent as HTTP Basic Auth header instead).
+
+		Args:
+		    refresh_token: The stored refresh token.
+
+		Returns:
+		    A dict of parameters to pass to ``_token_request()``.
+		"""
+		data: dict[str, str | None] = {
+			"grant_type": "refresh_token",
+			"refresh_token": refresh_token,
+		}
+		if self._provider_config.token_request_style == "form":
+			data["client_id"] = self._provider_config.client_id
+			data["client_secret"] = self._provider_config.client_secret or ""
+		return data
+
+	def _build_auth_header(self) -> dict[str, str]:
+		"""Build the HTTP Basic Auth header for query-style token requests.
+
+		Returns:
+		    A dict with the ``Authorization`` header, or an empty dict
+		    if not using query style.
+		"""
+		if self._provider_config.token_request_style != "query":
+			return {}
+		credentials = f"{self._provider_config.client_id}:{self._provider_config.client_secret or ''}"
+		encoded = base64.b64encode(credentials.encode()).decode()
+		return {"Authorization": f"Basic {encoded}"}
+
+	def _refresh_token_request(self, data: dict[str, str | None]) -> dict[str, Any]:
+		"""Make a POST request to the refresh token endpoint.
+
+		Uses ``refresh_token_url`` from the provider config, falling
+		back to ``token_url`` if not set.
+
+		Args:
+		    data: The parameters to send in the refresh request.
+
+		Returns:
+		    The parsed JSON response dict.
+
+		Raises:
+		    TokenRevokedError: If the refresh token is revoked or invalid.
+		    OAuthHandshakeError: For other non-2xx responses.
+		"""
+		grant_type = data.get("grant_type", "")
+		token_request_style = self._provider_config.token_request_style
+		refresh_url = self._provider_config.refresh_token_url or self._provider_config.token_url
+
+		request_kwargs: dict[str, Any] = {
+			"timeout": self._provider_config.token_safety_buffer_seconds,
+		}
+		clean_data = {k: v for k, v in data.items() if v is not None}
+
+		if token_request_style == "query":
+			request_kwargs["params"] = clean_data
+			request_kwargs["headers"] = self._build_auth_header()
+		else:
+			request_kwargs["data"] = clean_data
+
+		try:
+			response = requests.post(refresh_url, **request_kwargs)
+		except requests.RequestException as exc:
+			frappe.logger().error(
+				"OAuth token refresh request failed for provider %s (url=%s): %s",
+				self._provider_name,
+				refresh_url,
+				exc,
+			)
+			raise OAuthHandshakeError(
+				f"Token refresh request failed for '{self._provider_name}' "
+				f"(endpoint={refresh_url}): {exc}"
+			) from exc
+
+		if response.status_code == 200:
+			return response.json()
+
+		# 400/401 during refresh typically means the refresh token is revoked.
+		if response.status_code in (400, 401):
+			raise TokenRevokedError(
+				f"Refresh token revoked for '{self._provider_name}' "
+				f"(endpoint={refresh_url}, "
+				f"HTTP {response.status_code}): {response.text}"
+			)
+
+		raise OAuthHandshakeError(
+			f"Token refresh request failed for '{self._provider_name}' "
+			f"(grant_type={grant_type}, endpoint={refresh_url}, "
+			f"HTTP {response.status_code}): {response.text}"
+		)
+
 	def _token_request(self, data: dict[str, str | None]) -> dict[str, Any]:
 		"""Make a POST request to the token endpoint and handle responses.
 
 		If the provider config contains a ``jwt_private_key``, a JWT
 		client assertion (RFC 7523) is generated fresh for each call
 		and sent as ``client_assertion`` instead of ``client_secret``.
+
+		For ``"query"`` style token requests, parameters are sent as
+		URL query parameters and authentication uses HTTP Basic Auth
+		header instead of form-encoded POST body.
 
 		Args:
 		    data: The form-encoded body to send to the token endpoint.
@@ -482,12 +627,26 @@ class OAuth2Service:
 			data["client_assertion"] = self._build_client_assertion_jwt()
 
 		grant_type = data.get("grant_type", "")
+		token_request_style = self._provider_config.token_request_style
+
+		# Build request kwargs: form style sends data in body, query style sends
+		# params as URL query string with Basic Auth header.
+		request_kwargs: dict[str, Any] = {
+			"timeout": self._provider_config.token_safety_buffer_seconds,
+		}
+		clean_data = {k: v for k, v in data.items() if v is not None}
+
+		if token_request_style == "query":
+			request_kwargs["params"] = clean_data
+			request_kwargs["headers"] = self._build_auth_header()
+		else:
+			# Default "form" style: send as POST body (form-encoded).
+			request_kwargs["data"] = clean_data
 
 		try:
 			response = requests.post(
 				self._provider_config.token_url,
-				data={k: v for k, v in data.items() if v is not None},
-				timeout=self._provider_config.token_safety_buffer_seconds,
+				**request_kwargs,
 			)
 		except requests.RequestException as exc:
 			frappe.logger().error(
@@ -539,6 +698,10 @@ class OAuth2Service:
 	def _parse_token_response(data: dict[str, Any]) -> OAuthToken:
 		"""Parse a token endpoint JSON response into an ``OAuthToken``.
 
+		Supports two expiry patterns:
+		- ``expires_in`` (seconds from now, standard OAuth2)
+		- ``expires_at`` (epoch timestamp in milliseconds, e.g. Eurobank)
+
 		Args:
 		    data: The parsed JSON response from the token endpoint.
 
@@ -546,18 +709,33 @@ class OAuth2Service:
 		    An ``OAuthToken`` instance.
 		"""
 		expires_at: datetime | None = None
+
 		expires_in = data.get("expires_in")
 		if expires_in is not None:
+			# Standard OAuth2: ``expires_in`` is seconds from now.
 			expires_at = datetime.now().replace(microsecond=0) + __import__("datetime").timedelta(
 				seconds=int(expires_in)
 			)
+		else:
+			# Eurobank-style: ``expires_at`` is epoch timestamp in milliseconds.
+			expires_at_epoch = data.get("expires_at")
+			if expires_at_epoch is not None:
+				expires_at = datetime.fromtimestamp(int(expires_at_epoch) / 1000, tz=timezone.utc)
+				expires_at = expires_at.replace(tzinfo=None)  # Frappe convention: naive datetime
+
+		# Eurobank returns scope as a list, standard OAuth2 returns a space-separated string.
+		scope_raw = data.get("scope")
+		if isinstance(scope_raw, list):
+			scope = ",".join(str(s) for s in scope_raw)
+		else:
+			scope = str(scope_raw) if scope_raw is not None else ""
 
 		return OAuthToken(
 			access_token=str(data["access_token"]),
 			refresh_token=str(data["refresh_token"]) if data.get("refresh_token") else None,
 			token_type=str(data.get("token_type", "Bearer")),
 			expires_at=expires_at,
-			scope=str(data.get("scope", "")),
+			scope=scope,
 			provider_metadata={k: v for k, v in data.items() if k not in _OAUTH_STANDARD_KEYS},
 		)
 
@@ -676,6 +854,7 @@ _OAUTH_STANDARD_KEYS = frozenset(
 		"refresh_token",
 		"token_type",
 		"expires_in",
+		"expires_at",
 		"scope",
 	}
 )

@@ -310,6 +310,114 @@ MOCK_BOC_ERROR_500: dict[str, Any] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Production-like counterparty fixtures
+# ---------------------------------------------------------------------------
+
+MOCK_BOC_STATEMENT_WITH_PARTIES: dict[str, Any] = {
+    "account": {
+        "bankId": "12345671",
+        "accountId": "351012345671",
+        "accountAlias": "ANDREAS",
+        "accountType": "CURRENT",
+        "accountName": "ANDREAS MICHAEL",
+        "IBAN": "CY11002003510000000012345671",
+        "currency": "EUR",
+        "infoTimeStamp": "1511779237",
+    },
+    "transaction": [
+        {
+            # DEBIT: money out → counterparty is the creditor.
+            "id": "663c9d26de9162079842ce10",
+            "dcInd": "DEBIT",
+            "transactionAmount": {"amount": 250.0, "currency": "EUR"},
+            "description": "Invoice payment to TechCorp Ltd",
+            "postingDate": "10/05/2024",
+            "valueDate": "10/05/2024",
+            "creditorName": "TechCorp Ltd",
+            "creditorAccount": {
+                "iban": "CY22002001230000000012345678",
+                "currency": "EUR",
+            },
+            "remittanceInformationUnstructured": "INV-2024-0042",
+            "feeAmount": 2.50,
+        },
+        {
+            # CREDIT: money in → counterparty is the debtor.
+            "id": "663c9d26de9162079842ce11",
+            "dcInd": "CREDIT",
+            "transactionAmount": {"amount": 3200.0, "currency": "EUR"},
+            "description": "Client payment - Alpha Services",
+            "postingDate": "11/05/2024",
+            "valueDate": "11/05/2024",
+            "debtorName": "Alpha Services Ltd",
+            "debtorAccount": {
+                "iban": "CY33003003450000000098765432",
+                "currency": "EUR",
+            },
+            "remittanceInformationUnstructured": "PAY-2024-0088",
+        },
+        {
+            # DEBIT with full account number (no IBAN).
+            "id": "663c9d26de9162079842ce12",
+            "dcInd": "DEBIT",
+            "transactionAmount": {"amount": 89.99, "currency": "EUR"},
+            "description": "Online payment - WebHosting Pro",
+            "postingDate": "12/05/2024",
+            "valueDate": "12/05/2024",
+            "creditorName": "WebHosting Pro",
+            "creditorAccount": {
+                "accountNumber": "1234567890",
+                "currency": "EUR",
+            },
+            "endToEndId": "E2E-998877",
+        },
+        {
+            # DEBIT with fee in transactionAmount.includedFee.
+            "id": "663c9d26de9162079842ce13",
+            "dcInd": "DEBIT",
+            "transactionAmount": {
+                "amount": 500.0,
+                "currency": "EUR",
+                "includedFee": 5.0,
+            },
+            "description": "International wire transfer",
+            "postingDate": "13/05/2024",
+            "valueDate": "13/05/2024",
+        },
+    ],
+}
+
+# ---------------------------------------------------------------------------
+# Same-date pagination fixture
+# ---------------------------------------------------------------------------
+
+MOCK_BOC_STATEMENT_SAME_DATE: dict[str, Any] = {
+    "account": {
+        "bankId": "12345671",
+        "accountId": "351012345671",
+        "accountAlias": "ANDREAS",
+        "accountType": "CURRENT",
+        "accountName": "ANDREAS MICHAEL",
+        "IBAN": "CY11002003510000000012345671",
+        "currency": "EUR",
+        "infoTimeStamp": "1511779237",
+    },
+    "transaction": [
+        {
+            "id": f"same-date-{i:03d}",
+            "dcInd": "DEBIT" if i % 2 == 0 else "CREDIT",
+            "transactionAmount": {"amount": float(i * 10), "currency": "EUR"},
+            "description": f"Same-date transaction {i}",
+            # All on the same date to trigger the same-date wall.
+            "postingDate": "15/07/2026",
+            "valueDate": "15/07/2026",
+        }
+        for i in range(1, 101)  # 100 transactions = full page at page_size=100
+    ],
+}
+
+
 def make_statement_page(
     transactions: list[dict[str, Any]],
     account_id: str = "351012345671",

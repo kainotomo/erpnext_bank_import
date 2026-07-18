@@ -16,6 +16,38 @@ Every account API call requires both a ``Bearer`` token and a
 Unlike Revolut, tokens are scoped **per connector** (not per bank
 account).  A single subscription covers all accounts the user granted
 access to.
+
+Known Limitations
+-----------------
+- **Date-cursor pagination**: BoC has no native cursor API.
+  Pagination uses the last transaction's ``postingDate`` as the
+  next page's ``date_to``.  When many transactions share a single
+  ``postingDate`` (a "same-date wall"), the cursor does not advance
+  and pagination stops to avoid an infinite loop.  Dedup at the
+  import level handles any overlap.  See ``fetch_transactions()``.
+
+- **Counterparty data**: BoC production responses include
+  ``debtorName``/``creditorName`` and ``debtorAccount``/
+  ``creditorAccount`` per the Berlin Group NextGenPSD2 standard.
+  The sandbox does not include these fields; extraction is
+  best-effort (defensive ``.get()`` with ``None`` defaults).
+
+- **OAuth2 ``state`` parameter**: BoC does **not** support the
+  standard OAuth2 ``state`` parameter.  Passing it results in a
+  ``badstate`` error.  The callback (``oauth_callback``) falls
+  back to iterating all enabled BoC connectors to find a matching
+  pending subscription.
+
+- **Subscription expiry**: Subscriptions have a finite lifetime
+  (typically 90 days).  The connector stores the ``expirationDate``
+  from subscription details in ``provider_metadata`` and checks
+  expiry during ``_load_subscription_id()``.  An expired
+  subscription raises ``AuthenticationError`` with a message
+  directing the user to re-authorize.
+
+- **Rate limiting**: No client-side rate limiting is implemented
+  at the BoC connector level (unlike Revolut).  This should be
+  added before production deployment.
 """
 
 from __future__ import annotations
@@ -231,11 +263,30 @@ class BankOfCyprusConnector(BankConnector):
                 )
                 continue
 
-        # Determine next page token: if we got a full page, use the
-        # last transaction's postingDate as the cursor.
+        # Determine next page token.
+        #
+        # BoC has no native cursor — we use the last transaction's
+        # postingDate as a date-cursor.  If the page was full AND the
+        # last postingDate is the same as the cursor we used for this
+        # request, we have hit a "same-date wall" (many transactions
+        # share one postingDate).  Stop pagination to avoid an
+        # infinite loop; dedup at the import level handles any
+        # overlap.
         next_token: str | None = None
         if len(raw_transactions) >= page_size and raw_transactions:
-            next_token = raw_transactions[-1].get("postingDate")
+            last_posting_date = raw_transactions[-1].get("postingDate")
+            if page_token and last_posting_date == page_token:
+                frappe.log_error(
+                    message=(
+                        f"BoC same-date cursor wall at {last_posting_date} for "
+                        f"account {account_id} — stopping pagination to avoid "
+                        f"infinite loop."
+                    ),
+                    title="BoC Pagination Warning",
+                )
+                next_token = None
+            else:
+                next_token = last_posting_date
 
         return normalized, next_token
 
@@ -245,6 +296,20 @@ class BankOfCyprusConnector(BankConnector):
         BoC uses ``dcInd`` to indicate direction:
         - ``"DEBIT"``  → amount is negative (money out).
         - ``"CREDIT"`` → amount is positive (money in).
+
+        Counterparty extraction (production BoC API provides these
+        following the Berlin Group PSD2 standard):
+        - ``DEBIT`` transactions: counterparty is the **creditor**
+          (money going out from us to the creditor).
+        - ``CREDIT`` transactions: counterparty is the **debtor**
+          (money coming in from the debtor to us).
+
+        Fee extraction tries the following fields:
+        - ``feeAmount`` / ``fee`` at the top-level of the transaction.
+        - ``includedFee`` / ``excludedFee`` from ``transactionAmount``.
+
+        All extractions are defensive (​.get() with None defaults) —
+        sandbox test data lacks these fields.
 
         Args:
             raw: A BoC transaction dict from the statement API.
@@ -288,6 +353,51 @@ class BankOfCyprusConnector(BankConnector):
         # Convert date from DD/MM/YYYY to ISO.
         iso_date = BocSubscriptionService.date_from_api(posting_date)
 
+        # —— Counterparty extraction ——
+        # DEBIT: money out → counterparty is the creditor.
+        # CREDIT: money in → counterparty is the debtor.
+        if dc_ind == "DEBIT":
+            party_name = raw.get("creditorName")
+            party_account = raw.get("creditorAccount", {})
+            party_iban = party_account.get("iban") if isinstance(party_account, dict) else None
+            party_account_number = (
+                party_account.get("accountNumber")
+                if isinstance(party_account, dict)
+                else None
+            )
+        else:
+            party_name = raw.get("debtorName")
+            party_account = raw.get("debtorAccount", {})
+            party_iban = party_account.get("iban") if isinstance(party_account, dict) else None
+            party_account_number = (
+                party_account.get("accountNumber")
+                if isinstance(party_account, dict)
+                else None
+            )
+
+        # —— Reference number extraction ——
+        # Prefer remittance information over raw transaction ID.
+        reference = (
+            raw.get("remittanceInformationUnstructured")
+            or raw.get("endToEndId")
+            or str(txn_id)
+        )
+
+        # —— Fee extraction ——
+        included_fee = None
+        excluded_fee = None
+        fee_raw = raw.get("feeAmount") or raw.get("fee")
+        if fee_raw is not None:
+            included_fee = float(fee_raw)
+        else:
+            # Check inside transactionAmount for fee detail.
+            incl = amount_container.get("includedFee")
+            excl = amount_container.get("excludedFee")
+            if incl is not None:
+                included_fee = float(incl)
+            if excl is not None:
+                excluded_fee = float(excl)
+
         # Build NormalizedTransaction.
         return NormalizedTransaction(
             external_id=str(txn_id),
@@ -295,16 +405,14 @@ class BankOfCyprusConnector(BankConnector):
             amount=signed_amount,
             currency=str(currency),
             description=str(raw.get("description", "")),
-            reference_number=str(raw.get("id")),  # Fallback: use transaction ID
+            reference_number=reference,
             transaction_type=dc_ind,
             provider_metadata=raw,
-            # Counterparty fields — may be populated in production but
-            # not in sandbox test data.
-            bank_party_name=None,
-            bank_party_account_number=None,
-            bank_party_iban=None,
-            included_fee=None,
-            excluded_fee=None,
+            bank_party_name=party_name,
+            bank_party_account_number=party_account_number,
+            bank_party_iban=party_iban,
+            included_fee=included_fee,
+            excluded_fee=excluded_fee,
         )
 
     # ------------------------------------------------------------------
@@ -345,12 +453,19 @@ class BankOfCyprusConnector(BankConnector):
         return self._oauth.get_valid_access_token(self._connector_name)
 
     def _load_subscription_id(self) -> None:
-        """Load the subscription ID from the stored token metadata."""
+        """Load the subscription ID from the stored token metadata.
+
+        Checks if the subscription has expired and raises a
+        descriptive error if so.  Subscriptions have a finite
+        lifetime (typically 90 days from creation).
+        """
         if self._connector_name is None:
             self._subscription_id = None
             return
 
         try:
+            from datetime import UTC, datetime
+
             from erpnext_bank_import.services.oauth import OAuth2Service
 
             token_data = self._oauth._load_tokens(self._connector_name)
@@ -360,9 +475,29 @@ class BankOfCyprusConnector(BankConnector):
                     import json
 
                     metadata = json.loads(metadata)
+
+                # Check subscription expiry.
+                expires_at = metadata.get("subscription_expires_at")
+                if expires_at:
+                    try:
+                        expiry_dt = datetime.fromisoformat(expires_at)
+                        if expiry_dt.tzinfo is None:
+                            expiry_dt = expiry_dt.replace(tzinfo=UTC)
+                        if datetime.now(UTC) >= expiry_dt:
+                            self._subscription_id = None
+                            raise AuthenticationError(
+                                "Subscription expired on {0}. "
+                                "Please re-authorize the connector by going through "
+                                "the OAuth flow again.".format(expires_at)
+                            )
+                    except (ValueError, TypeError):
+                        pass  # Malformed date — proceed with subscription_id
+
                 self._subscription_id = metadata.get("subscription_id")
             else:
                 self._subscription_id = None
+        except AuthenticationError:
+            raise
         except Exception:
             self._subscription_id = None
 
@@ -582,8 +717,16 @@ def _complete_subscription_flow(
     # Activate the subscription.
     boc.activate_subscription(user_token, subscription_id, selected_accounts)
 
-    # Store subscription_id in token metadata.
-    _store_subscription_id_in_metadata(connector_name, subscription_id)
+    # Extract subscription expiry from the subscription details.
+    # BoC subscriptions have an expirationDate field (DD/MM/YYYY).
+    expiration_date = sub_details.get("expirationDate")
+
+    # Store subscription_id + expiry in token metadata.
+    _store_subscription_id_in_metadata(
+        connector_name,
+        subscription_id,
+        expiration_date=expiration_date,
+    )
 
     # Clean up cached pending subscription.
     frappe.cache().delete_value(f"boc_pending:{connector_name}")
@@ -619,12 +762,17 @@ def _find_boc_connector() -> str | None:
 def _store_subscription_id_in_metadata(
     connector_name: str,
     subscription_id: str,
+    expiration_date: str | None = None,
 ) -> None:
     """Store the subscription ID in the token record's provider_metadata.
 
     Args:
         connector_name: The connector name (used as token key).
         subscription_id: The subscription ID to store.
+        expiration_date: Optional expiry date from the subscription
+            details (DD/MM/YYYY).  If provided, the ISO equivalent
+            is stored as ``subscription_expires_at`` for expiry
+            checks during import.
     """
     from datetime import UTC, datetime
 
@@ -643,6 +791,17 @@ def _store_subscription_id_in_metadata(
                 existing_metadata = json.loads(existing_metadata)
             existing_metadata["subscription_id"] = subscription_id
             existing_metadata["subscription_created_at"] = datetime.now(UTC).isoformat()
+
+            # Store expiry date as ISO for easy comparison.
+            if expiration_date:
+                from erpnext_bank_import.services.boc_subscription import BocSubscriptionService
+
+                iso_expiry = BocSubscriptionService.date_from_api(expiration_date)
+                existing_metadata["subscription_expires_at"] = iso_expiry
+            elif "subscription_expires_at" in existing_metadata:
+                # Clear stale expiry if not provided (fallback).
+                existing_metadata.pop("subscription_expires_at", None)
+
             doc.db_set("provider_metadata", existing_metadata)
             frappe.db.commit()
     except Exception as exc:
